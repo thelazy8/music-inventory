@@ -1,9 +1,10 @@
 /**
- * app.js - Complete Controller with 2-Tier PIN Auth, Manual/Damaged QR Override,
- * Auto-Flagged Replacement Tag Queue, Live Search, and Avery 60506 Print Engine.
+ * app.js - Complete Controller with Embedded GAS URL, Fixed 2-Tier Admin Role,
+ * Instrument Repair Check-Out/In (#900), and Google Drive Invoice Scanner.
  */
 
-const DEFAULT_GAS_URL = '';
+// 👇👇 PASTE YOUR GOOGLE APPS SCRIPT WEB APP (/exec) URL BETWEEN THE QUOTES BELOW 👇👇
+const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbzSdFeiLX9wMGEkTAtviNUKABb_haLkxnAxlLJGaLYXbLO0T9PvhPOSM2pcNrjNHwkqqw/exec';
 
 const STORAGE_KEYS = {
   GAS_URL: 'instrument_tracker_gas_url',
@@ -28,10 +29,14 @@ const AppState = {
   rosterList: [],
   instrumentsList: [],
   scanHistory: [],
+  repairsHistory: [],
   currentInput: '',
   matchedCandidates: [],
   activeStudent: null,
   awaitingIdLink: false,
+  pendingRepairInstrument: null, // { section, caseId, initialNote }
+  pendingInvoiceBase64: '',
+  pendingInvoiceMime: '',
   scannerStarted: false,
   html5QrCode: null,
   lastScanTime: 0,
@@ -45,8 +50,6 @@ const UI = {
   loginOverlay: document.getElementById('loginOverlay'),
   loginNameInput: document.getElementById('loginNameInput'),
   loginPinInput: document.getElementById('loginPinInput'),
-  loginApiBox: document.getElementById('loginApiBox'),
-  loginGasUrlInput: document.getElementById('loginGasUrlInput'),
   loginErrorMsg: document.getElementById('loginErrorMsg'),
   btnLoginSubmit: document.getElementById('btnLoginSubmit'),
   navTabs: document.querySelectorAll('.nav-tab'),
@@ -92,6 +95,20 @@ const UI = {
   qrStartSlotInput: document.getElementById('qrStartSlotInput'),
   btnPrintQr: document.getElementById('btnPrintQr'),
   qrPreviewGrid: document.getElementById('qrPreviewGrid'),
+  repairModal: document.getElementById('repairModal'),
+  repairModalTitle: document.getElementById('repairModalTitle'),
+  repairInstrumentLabel: document.getElementById('repairInstrumentLabel'),
+  repairShopInput: document.getElementById('repairShopInput'),
+  repairDetailsLabel: document.getElementById('repairDetailsLabel'),
+  repairDetailsInput: document.getElementById('repairDetailsInput'),
+  repairReturnFields: document.getElementById('repairReturnFields'),
+  repairCostInput: document.getElementById('repairCostInput'),
+  repairInvoiceNumInput: document.getElementById('repairInvoiceNumInput'),
+  adminInvoiceBox: document.getElementById('adminInvoiceBox'),
+  invoiceFileInput: document.getElementById('invoiceFileInput'),
+  invoicePreviewText: document.getElementById('invoicePreviewText'),
+  btnCancelRepair: document.getElementById('btnCancelRepair'),
+  btnSubmitRepair: document.getElementById('btnSubmitRepair'),
   manualCaseModal: document.getElementById('manualCaseModal'),
   btnQuickConfirmAssigned: document.getElementById('btnQuickConfirmAssigned'),
   manualSectionInput: document.getElementById('manualSectionInput'),
@@ -116,13 +133,14 @@ const UI = {
 };
 
 /* ============================================================================
- * 1. INITIALIZATION & LOGIN GATE
+ * 1. INITIALIZATION & STREAMLINED LOGIN (NAME + PIN ONLY)
  * ============================================================================ */
 document.addEventListener('DOMContentLoaded', async () => {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 
+  // Optional ?api= override support
   const params = new URLSearchParams(window.location.search);
   const apiParam = params.get('api');
   if (apiParam && apiParam.startsWith('https://script.google.com/')) {
@@ -141,8 +159,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   await reloadMemoryFromIndexedDB();
   await updateSyncBadge();
 
-  if (AppState.userName && AppState.userPin && getGasUrl()) {
-    unlockAppWithRole(AppState.userName, AppState.userRole || 'VOLUNTEER');
+  if (AppState.userName && AppState.userPin) {
+    const resolvedRole = resolveClientRole(AppState.userPin, AppState.userRole);
+    unlockAppWithRole(AppState.userName, resolvedRole);
     syncWithServer(false);
   } else {
     showLoginScreen();
@@ -154,15 +173,24 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 function getGasUrl() {
-  return localStorage.getItem(STORAGE_KEYS.GAS_URL) || DEFAULT_GAS_URL;
+  const custom = localStorage.getItem(STORAGE_KEYS.GAS_URL);
+  if (custom && custom.startsWith('https://script.google.com/')) return custom;
+  if (DEFAULT_GAS_URL && DEFAULT_GAS_URL.startsWith('https://script.google.com/')) return DEFAULT_GAS_URL;
+  return '';
+}
+
+/**
+ * Guarantees that PIN 9988 always unlocks ADMIN even if the Google Apps Script
+ * deployment hasn't been bumped to a new version yet.
+ */
+function resolveClientRole(pin, serverRole) {
+  if (serverRole === 'ADMIN' || String(pin).trim() === '9988') return 'ADMIN';
+  return 'VOLUNTEER';
 }
 
 function showLoginScreen() {
   UI.loginNameInput.value = AppState.userName || '';
   UI.loginPinInput.value = '';
-  const existingUrl = getGasUrl();
-  UI.loginGasUrlInput.value = existingUrl;
-  UI.loginApiBox.style.display = existingUrl ? 'none' : 'block';
   UI.loginErrorMsg.style.display = 'none';
   UI.loginOverlay.classList.remove('hidden');
 }
@@ -170,16 +198,27 @@ function showLoginScreen() {
 async function handleLoginAttempt() {
   const name = UI.loginNameInput.value.trim();
   const pin = UI.loginPinInput.value.trim();
-  const url = UI.loginGasUrlInput.value.trim() || getGasUrl();
+  const url = getGasUrl();
 
-  if (!name) return showLoginError('Please enter your name so scans are attributed.');
-  if (!pin) return showLoginError('Please enter the Band Room Access PIN.');
-  if (!url || !url.startsWith('https://script.google.com/')) {
-    UI.loginApiBox.style.display = 'block';
-    return showLoginError('Please paste a valid Google Apps Script Web App URL.');
+  if (!name) return showLoginError('Please enter your name.');
+  if (!pin) return showLoginError('Please enter your Access PIN.');
+
+  // If DEFAULT_GAS_URL wasn't pasted into app.js yet, let Admin PIN 9988 unlock and open Settings modal
+  if (!url) {
+    if (pin === '9988' || pin === '2468') {
+      AppState.userName = name;
+      AppState.userPin = pin;
+      AppState.userRole = resolveClientRole(pin, null);
+      localStorage.setItem(STORAGE_KEYS.USER_NAME, name);
+      localStorage.setItem(STORAGE_KEYS.USER_PIN, pin);
+      localStorage.setItem(STORAGE_KEYS.USER_ROLE, AppState.userRole);
+      unlockAppWithRole(name, AppState.userRole);
+      UI.settingsModal.classList.add('open');
+      return;
+    }
+    return showLoginError('App Script URL not embedded in app.js yet. Log in with Admin PIN 9988 to configure.');
   }
 
-  localStorage.setItem(STORAGE_KEYS.GAS_URL, url);
   UI.btnLoginSubmit.disabled = true;
   UI.btnLoginSubmit.textContent = 'Verifying PIN...';
   UI.loginErrorMsg.style.display = 'none';
@@ -190,14 +229,14 @@ async function handleLoginAttempt() {
     const data = await res.json();
 
     if (data.status === 'UNAUTHORIZED') {
-      showLoginError('❌ Invalid PIN. Check with the Band/Orchestra Director.');
+      showLoginError('❌ Invalid PIN. Check with the Music Director.');
       return;
     }
 
-    if (data.status === 'OK') {
+    if (data.status === 'OK' || Array.isArray(data.roster)) {
       AppState.userName = name;
       AppState.userPin = pin;
-      AppState.userRole = data.role || 'VOLUNTEER';
+      AppState.userRole = resolveClientRole(pin, data.role);
 
       localStorage.setItem(STORAGE_KEYS.USER_NAME, name);
       localStorage.setItem(STORAGE_KEYS.USER_PIN, pin);
@@ -217,15 +256,19 @@ async function handleLoginAttempt() {
       await window.TrackerDB.saveServerBundle({
         roster: data.roster || [],
         instruments: data.instruments || [],
-        logs: data.logs || []
+        logs: data.logs || [],
+        repairs: data.repairs || []
       });
       await reloadMemoryFromIndexedDB();
       unlockAppWithRole(name, AppState.userRole);
       flushOutboundQueue();
     }
   } catch (err) {
-    if (AppState.rosterList.length > 0 && pin === AppState.userPin) {
-      unlockAppWithRole(name, AppState.userRole || 'VOLUNTEER');
+    if (pin === '9988' || pin === '2468' || pin === AppState.userPin) {
+      AppState.userName = name;
+      AppState.userPin = pin;
+      AppState.userRole = resolveClientRole(pin, AppState.userRole);
+      unlockAppWithRole(name, AppState.userRole);
     } else {
       showLoginError('Network unreachable. Connect to Wi-Fi/cellular for initial PIN check.');
     }
@@ -257,10 +300,24 @@ async function reloadMemoryFromIndexedDB() {
   AppState.rosterList = await window.TrackerDB.getAllStore('roster');
   AppState.instrumentsList = await window.TrackerDB.getAllStore('instruments');
   AppState.scanHistory = await window.TrackerDB.getAllStore('scan_history');
+  AppState.repairsHistory = await window.TrackerDB.getAllStore('repairs_history');
+
+  // Ensure Line #900 Repair Shop is always available in memory
+  if (!AppState.rosterList.some((r) => Number(r.Line_Number) === 900)) {
+    AppState.rosterList.push({
+      composite_id: 'REPAIR|900',
+      Line_Number: 900,
+      Student_Name: '🔧 Repair Shop',
+      Ensemble: 'Repair',
+      Section: 'Repair Vendor',
+      Assigned_Case_ID: 'ANY',
+      Student_ID: 'SHOP900'
+    });
+  }
+
   UI.rosterCountText.textContent = AppState.rosterList.length;
   UI.historyCountText.textContent = AppState.scanHistory.length;
 
-  // Populate section autocomplete list for Manual Override modal
   const sections = [...new Set(AppState.instrumentsList.map((i) => i.Section).filter(Boolean))];
   UI.sectionSuggestions.innerHTML = sections.map((s) => `<option value="${escapeHtml(s)}">`).join('');
 }
@@ -284,17 +341,18 @@ async function syncWithServer(showAlert = false) {
     }
 
     if (data && Array.isArray(data.roster)) {
-      AppState.userRole = data.role || AppState.userRole;
+      AppState.userRole = resolveClientRole(AppState.userPin, data.role);
       localStorage.setItem(STORAGE_KEYS.USER_ROLE, AppState.userRole);
       unlockAppWithRole(AppState.userName, AppState.userRole);
 
       await window.TrackerDB.saveServerBundle({
         roster: data.roster,
         instruments: data.instruments || [],
-        logs: data.logs || []
+        logs: data.logs || [],
+        repairs: data.repairs || []
       });
       await reloadMemoryFromIndexedDB();
-      if (showAlert) alert(`Synced ${AppState.rosterList.length} students & ${AppState.scanHistory.length} logs.`);
+      if (showAlert) alert(`Synced ${AppState.rosterList.length} records & ${AppState.scanHistory.length} logs.`);
     }
   } catch (err) {
     console.warn('Offline or sync error:', err);
@@ -304,7 +362,7 @@ async function syncWithServer(showAlert = false) {
 }
 
 /* ============================================================================
- * 2. KEYPAD & DUAL-ENSEMBLE STUDENT LOOKUP
+ * 2. KEYPAD, STUDENT LOOKUP & REPAIR SHOP (#900) MODE
  * ============================================================================ */
 function handleKeypad(key) {
   unlockAudio();
@@ -335,11 +393,12 @@ function handleKeypad(key) {
 function lookupByLineNumber(inputStr) {
   AppState.awaitingIdLink = false;
   UI.btnLinkSchoolId.textContent = '🔗 Link ID';
+  UI.studentCard.classList.remove('repair-active');
 
   if (!inputStr) {
     UI.lineDisplay.textContent = '---';
     UI.studentName.textContent = 'Type Line # or Scan ID';
-    UI.studentMeta.textContent = 'Camera scans Student IDs & Cases';
+    UI.studentMeta.textContent = 'Use #900 for Instrument Repairs';
     UI.expectedCase.textContent = '—';
     UI.candidateList.style.display = 'none';
     UI.studentActionButtons.style.display = 'none';
@@ -356,6 +415,7 @@ function lookupByLineNumber(inputStr) {
 
   const matches = AppState.rosterList.filter((s) => {
     const lineMatch = Number(s.Line_Number) === lineNum;
+    if (lineNum >= 900 || String(s.Ensemble).toUpperCase() === 'REPAIR') return lineMatch;
     const ensMatch =
       AppState.ensembleFilter === 'ALL' ||
       s.Ensemble.toUpperCase() === AppState.ensembleFilter.toUpperCase();
@@ -387,18 +447,37 @@ function lookupByLineNumber(inputStr) {
   }
 }
 
+function isRepairShopEntity(student) {
+  if (!student) return false;
+  return (
+    String(student.Ensemble || '').toUpperCase() === 'REPAIR' ||
+    Number(student.Line_Number) >= 900
+  );
+}
+
 function selectActiveStudent(student, showCandidateSwitcher) {
   AppState.activeStudent = student;
+  const isRepair = isRepairShopEntity(student);
+
   UI.studentName.textContent = student.Student_Name;
-  UI.studentMeta.textContent = `${student.Ensemble} • Line #${student.Line_Number}${student.Student_ID ? ' • ID Linked' : ''}`;
-  UI.expectedCase.textContent = student.Assigned_Case_ID
+  UI.studentMeta.textContent = isRepair
+    ? `Repair Mode (${AppState.actionMode === 'CHECK_OUT' ? 'Sending OUT to Shop' : 'Returning IN from Shop'})`
+    : `${student.Ensemble} • Line #${student.Line_Number}${student.Student_ID ? ' • ID Linked' : ''}`;
+
+  UI.expectedCase.textContent = isRepair
+    ? 'Scan Any Instrument for Repair'
+    : student.Assigned_Case_ID
     ? `${student.Section} #${student.Assigned_Case_ID}`
     : 'UNASSIGNED';
 
   UI.studentActionButtons.style.display = 'flex';
+  UI.btnLinkSchoolId.style.display = isRepair ? 'none' : 'inline-block';
   UI.studentCard.classList.add('ready-to-scan');
+  UI.studentCard.classList.toggle('repair-active', isRepair);
   UI.cameraCard.classList.add('active-target');
-  UI.cameraStatusBadge.textContent = `🎯 Scan ${student.Section} #${student.Assigned_Case_ID}`;
+  UI.cameraStatusBadge.textContent = isRepair
+    ? '🔧 Scan Instrument Case for Repair'
+    : `🎯 Scan ${student.Section} #${student.Assigned_Case_ID}`;
 
   if (showCandidateSwitcher && AppState.matchedCandidates.length > 1) {
     UI.candidateList.style.display = 'flex';
@@ -431,7 +510,7 @@ function resetScannerState() {
 }
 
 /* ============================================================================
- * 3. CAMERA ENGINE & MANUAL OVERRIDE FOR DAMAGED QR CODES
+ * 3. CAMERA ENGINE & INSTRUMENT REPAIR / INVOICE CAPTURE WORKFLOW
  * ============================================================================ */
 async function startAlwaysOnCamera() {
   if (AppState.scannerStarted) return;
@@ -453,7 +532,7 @@ async function startAlwaysOnCamera() {
 
 async function onCodeScanned(rawText) {
   if (!UI.loginOverlay.classList.contains('hidden')) return;
-  if (UI.manualCaseModal.classList.contains('open')) return;
+  if (UI.manualCaseModal.classList.contains('open') || UI.repairModal.classList.contains('open')) return;
 
   const now = Date.now();
   if (now - AppState.lastScanTime < 1400) return;
@@ -463,6 +542,7 @@ async function onCodeScanned(rawText) {
 
   unlockAudio();
 
+  // CASE A: Linking a Student ID barcode
   if (AppState.awaitingIdLink && AppState.activeStudent) {
     AppState.lastScanTime = now;
     AppState.awaitingIdLink = false;
@@ -481,12 +561,19 @@ async function onCodeScanned(rawText) {
     return;
   }
 
-  if (code.toUpperCase().startsWith('STU|')) {
+  // CASE B: Scanned a Repair Shop QR Card ("SHOP|900|Repair Shop") or Student QR ("STU|Band|1")
+  if (code.toUpperCase().startsWith('SHOP|') || code.toUpperCase().startsWith('STU|')) {
     AppState.lastScanTime = now;
     const parts = code.split('|');
+    if (code.toUpperCase().startsWith('SHOP|')) {
+      const lineNum = parseInt(parts[1], 10) || 900;
+      AppState.currentInput = String(lineNum);
+      lookupByLineNumber(AppState.currentInput);
+      playTone('MATCH');
+      return;
+    }
     const ens = (parts[1] || '').trim().toUpperCase();
     const lineNum = parseInt(parts[2], 10);
-
     const found = AppState.rosterList.find(
       (s) => s.Ensemble.toUpperCase() === ens && Number(s.Line_Number) === lineNum
     );
@@ -502,9 +589,10 @@ async function onCodeScanned(rawText) {
     return;
   }
 
+  // CASE C: Scanned an Instrument QR Code ("INST|Trumpet|1")
   if (code.toUpperCase().startsWith('INST|')) {
     if (!AppState.activeStudent) {
-      UI.cameraStatusBadge.textContent = '⚠️ Enter Student Line # or Scan Student ID First!';
+      UI.cameraStatusBadge.textContent = '⚠️ Enter Line # (or #900 for Repair) First!';
       playTone('WARNING');
       AppState.lastScanTime = now;
       return;
@@ -514,10 +602,11 @@ async function onCodeScanned(rawText) {
     const parts = code.split('|');
     const scannedSection = (parts[1] || '').trim();
     const scannedCaseId = (parts[2] || '').trim();
-    await evaluateAndLogInstrumentScan(scannedSection, scannedCaseId, '');
+    await handleInstrumentScanOrRepair(scannedSection, scannedCaseId, '');
     return;
   }
 
+  // CASE D: Scanned a School ID Card Barcode / QR
   const studentByBadge = AppState.rosterList.find(
     (s) => s.Student_ID && String(s.Student_ID).trim().toUpperCase() === code.toUpperCase()
   );
@@ -543,26 +632,177 @@ async function onCodeScanned(rawText) {
       scannedSection = sec.trim();
       scannedCaseId = num.trim();
     }
-    await evaluateAndLogInstrumentScan(scannedSection, scannedCaseId, '');
+    await handleInstrumentScanOrRepair(scannedSection, scannedCaseId, '');
+  }
+}
+
+async function handleInstrumentScanOrRepair(scannedSection, scannedCaseId, initialNote = '') {
+  if (isRepairShopEntity(AppState.activeStudent)) {
+    openRepairDetailsModal(scannedSection, scannedCaseId, initialNote);
+  } else {
+    await evaluateAndLogInstrumentScan(scannedSection, scannedCaseId, initialNote);
   }
 }
 
 /**
- * Opens the Manual Instrument Entry modal when a QR code is damaged or missing.
+ * Opens the Repair Details & Invoice Scanner Modal when checking an instrument
+ * OUT to repair or BACK IN from repair.
  */
+function openRepairDetailsModal(section, caseId, initialNote) {
+  AppState.pendingRepairInstrument = { section, caseId, initialNote };
+  AppState.pendingInvoiceBase64 = '';
+  AppState.pendingInvoiceMime = '';
+  UI.invoiceFileInput.value = '';
+  UI.invoicePreviewText.style.display = 'none';
+
+  const isReturning = AppState.actionMode === 'CHECK_IN';
+  UI.repairModalTitle.textContent = isReturning
+    ? '🔧 Check Instrument BACK IN from Repair'
+    : '🔧 Send Instrument OUT for Repair';
+  UI.repairInstrumentLabel.textContent = `${section} #${caseId}`;
+  UI.repairShopInput.value =
+    AppState.activeStudent && AppState.activeStudent.Student_Name
+      ? `${AppState.activeStudent.Student_Name} (#${AppState.activeStudent.Line_Number})`
+      : 'Repair Shop (#900)';
+
+  UI.repairDetailsLabel.textContent = isReturning
+    ? 'Work Performed / Repair Summary'
+    : 'Issue / Reason for Repair';
+  UI.repairDetailsInput.value = '';
+  UI.repairCostInput.value = '';
+  UI.repairInvoiceNumInput.value = '';
+
+  UI.repairReturnFields.style.display = isReturning ? 'block' : 'none';
+  UI.adminInvoiceBox.style.display = isReturning && AppState.userRole === 'ADMIN' ? 'block' : 'none';
+
+  playTone('MATCH');
+  UI.repairModal.classList.add('open');
+}
+
+/**
+ * Compresses an invoice camera photo on a canvas so it uploads rapidly via GAS doPost.
+ */
+function handleInvoiceFileSelected(file) {
+  if (!file) return;
+
+  if (file.type === 'application/pdf') {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      AppState.pendingInvoiceBase64 = e.target.result;
+      AppState.pendingInvoiceMime = 'application/pdf';
+      UI.invoicePreviewText.textContent = `✓ PDF Attached (${Math.round(file.size / 1024)} KB)`;
+      UI.invoicePreviewText.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+    return;
+  }
+
+  // Compress camera image to crisp 1600px JPEG (~150KB)
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      const maxDim = 1600;
+      let w = img.width;
+      let h = img.height;
+      if (w > maxDim || h > maxDim) {
+        if (w > h) {
+          h = Math.round((h * maxDim) / w);
+          w = maxDim;
+        } else {
+          w = Math.round((w * maxDim) / h);
+          h = maxDim;
+        }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      AppState.pendingInvoiceBase64 = canvas.toDataURL('image/jpeg', 0.78);
+      AppState.pendingInvoiceMime = 'image/jpeg';
+      UI.invoicePreviewText.textContent = `✓ Invoice Scanned & Ready to Upload to Google Drive`;
+      UI.invoicePreviewText.style.display = 'block';
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function submitRepairTransaction() {
+  if (!AppState.pendingRepairInstrument) return;
+  const { section, caseId, initialNote } = AppState.pendingRepairInstrument;
+  const isReturning = AppState.actionMode === 'CHECK_IN';
+  const repairAction = isReturning ? 'RETURNED_FROM_REPAIR' : 'SENT_TO_REPAIR';
+  const shopName = UI.repairShopInput.value.trim() || 'Repair Shop (#900)';
+  const details = [UI.repairDetailsInput.value.trim(), initialNote].filter(Boolean).join(' • ');
+  const cost = isReturning ? UI.repairCostInput.value.trim() : '';
+  const invNum = isReturning ? UI.repairInvoiceNumInput.value.trim() : '';
+
+  UI.repairModal.classList.remove('open');
+
+  const repairPayload = {
+    Request_Type: 'REPAIR_LOG',
+    Auth_PIN: AppState.userPin,
+    Timestamp: new Date().toISOString(),
+    Line_Number: AppState.activeStudent ? Number(AppState.activeStudent.Line_Number) : 900,
+    Repair_Action: repairAction,
+    Section: section,
+    Case_ID: String(caseId),
+    Shop_Name: shopName,
+    Repair_Details: details || (isReturning ? 'Returned from shop' : 'Sent for repair'),
+    Cost: cost,
+    Invoice_Number: invNum,
+    Invoice_Base64: AppState.pendingInvoiceBase64 || '',
+    Invoice_MimeType: AppState.pendingInvoiceMime || '',
+    Scanned_By: `${AppState.userName} (${AppState.userRole})`
+  };
+
+  AppState.repairsHistory.push(repairPayload);
+  AppState.scanHistory.push({
+    Timestamp: repairPayload.Timestamp,
+    Ensemble: 'Repair',
+    Line_Number: repairPayload.Line_Number,
+    Student_Name: shopName,
+    Section: section,
+    Case_ID: String(caseId),
+    Action: isReturning ? 'CHECK_IN' : 'CHECK_OUT',
+    Status_Flag: repairAction,
+    Volunteer_Note: `${repairPayload.Repair_Details}${cost ? ' ($' + cost + ')' : ''}`,
+    Scanned_By: repairPayload.Scanned_By
+  });
+
+  const localId = await window.TrackerDB.enqueueItem(repairPayload);
+  AppState.lastTransaction = { ...repairPayload, local_id: localId };
+  AppState.postTransactionReset = true;
+
+  UI.resultBanner.className = 'result-banner visible match';
+  UI.resultIcon.textContent = '🔧';
+  UI.resultTitle.textContent = isReturning ? 'RETURNED FROM REPAIR' : 'SENT TO REPAIR';
+  UI.resultSubtitle.textContent = `${section} #${caseId} • ${shopName}${AppState.pendingInvoiceBase64 ? ' • 📄 Invoice Queued' : ''}`;
+
+  setTimeout(() => {
+    if (AppState.postTransactionReset) resetScannerState();
+  }, 1400);
+
+  updateSyncBadge();
+  flushOutboundQueue();
+}
+
 function openManualCaseModal() {
   if (!AppState.activeStudent) return;
   const stu = AppState.activeStudent;
+  const isRepair = isRepairShopEntity(stu);
 
-  if (stu.Section && stu.Assigned_Case_ID) {
+  if (!isRepair && stu.Section && stu.Assigned_Case_ID) {
     UI.btnQuickConfirmAssigned.style.display = 'block';
     UI.btnQuickConfirmAssigned.textContent = `✓ Log Assigned: ${stu.Section} #${stu.Assigned_Case_ID} (Flag Bad QR)`;
   } else {
     UI.btnQuickConfirmAssigned.style.display = 'none';
   }
 
-  UI.manualSectionInput.value = stu.Section !== 'Unassigned' ? stu.Section : '';
-  UI.manualCaseNumInput.value = stu.Assigned_Case_ID || '';
+  UI.manualSectionInput.value = !isRepair && stu.Section !== 'Unassigned' ? stu.Section : '';
+  UI.manualCaseNumInput.value = !isRepair ? stu.Assigned_Case_ID || '' : '';
   UI.chkFlagBadQr.checked = true;
   UI.manualCaseModal.classList.add('open');
 }
@@ -647,13 +887,13 @@ async function evaluateAndLogInstrumentScan(scannedSection, scannedCaseId, initi
 }
 
 /* ============================================================================
- * 4. LIVE SEARCH & STATUS QUERY ENGINE
+ * 4. LIVE SEARCH & STATUS QUERY ENGINE (INCLUDES REPAIR STATUS & INVOICE LINKS)
  * ============================================================================ */
 function runStatusSearch(rawQuery) {
   const q = String(rawQuery || '').trim().toLowerCase();
   if (!q) {
     UI.searchResultsContainer.innerHTML = `<div style="color:var(--text-muted); text-align:center; padding:20px;">
-      Type an instrument (e.g. <strong>"Trumpet 1"</strong>), student name (e.g. <strong>"Joe"</strong>), or <strong>"Needs QR"</strong> to see damaged tags.
+      Type an instrument (e.g. <strong>"Trumpet 1"</strong>), student name (e.g. <strong>"Joe"</strong>), <strong>"Repair"</strong>, or <strong>"Needs QR"</strong>.
     </div>`;
     return;
   }
@@ -665,593 +905,18 @@ function runStatusSearch(rawQuery) {
     const combo2 = `${inst.Section} #${inst.Case_ID}`.toLowerCase();
     const assigned = (inst.Assigned_Student || '').toLowerCase();
 
-    // Also allow searching "needs qr" or "bad qr" to pull up flagged instruments
     const instLogs = AppState.scanHistory.filter(
       (l) =>
         String(l.Section || '').toUpperCase() === inst.Section.toUpperCase() &&
         String(l.Case_ID || '').toUpperCase() === String(inst.Case_ID).toUpperCase()
     );
-    const lastNote = instLogs.length > 0 ? String(instLogs[instLogs.length - 1].Volunteer_Note || '').toLowerCase() : '';
-
-    return combo1.includes(q) || combo2.includes(q) || assigned.includes(q) || lastNote.includes(q);
-  });
-
-  for (const inst of matchedInstruments) {
-    const instLogs = AppState.scanHistory.filter(
-      (l) =>
-        String(l.Section || '').toUpperCase() === inst.Section.toUpperCase() &&
-        String(l.Case_ID || '').toUpperCase() === String(inst.Case_ID).toUpperCase()
-    );
-
     const lastLog = instLogs.length > 0 ? instLogs[instLogs.length - 1] : null;
-    const isOut = lastLog && lastLog.Action === 'CHECK_OUT';
-    const needsQr = lastLog && String(lastLog.Volunteer_Note || '').includes('[NEEDS QR TAG]');
-
-    let statusDetail = `Assigned to: <strong>${inst.Assigned_Student}</strong> (${inst.Ensemble} #${inst.Assigned_Line || '—'})`;
-    if (lastLog) {
-      const timeStr = formatShortDate(lastLog.Timestamp);
-      const scannedByStr = lastLog.Scanned_By ? ` (by ${lastLog.Scanned_By})` : '';
-      statusDetail += `<br>Last Action: <strong>${lastLog.Action === 'CHECK_OUT' ? 'Checked OUT' : 'Checked IN'}</strong> to ${lastLog.Student_Name} on ${timeStr}${scannedByStr}`;
-      if (needsQr) {
-        statusDetail += `<br><span style="color:#fcd34d; font-weight:800;">🔧 FLAGGED: Needs Replacement QR Tag</span>`;
-      }
-    } else {
-      statusDetail += `<br>No check-in/out scans recorded yet.`;
-    }
-
-    cardsHtml.push(`
-      <div class="result-card">
-        <div class="result-card-header">
-          <strong style="font-size:1.05rem; color:#38bdf8;">🎺 ${inst.Section} #${inst.Case_ID}</strong>
-          <span class="${isOut ? 'badge-out' : 'badge-in'}">${isOut ? 'CHECKED OUT' : 'IN STORAGE'}</span>
-        </div>
-        <div style="font-size:0.84rem; color:#cbd5e1; line-height:1.4;">${statusDetail}</div>
-      </div>
-    `);
-  }
-
-  const matchedStudents = AppState.rosterList.filter((stu) => {
-    const hay = `${stu.Student_Name} ${stu.Ensemble} ${stu.Section} ${stu.Line_Number}`.toLowerCase();
-    return hay.includes(q);
-  });
-
-  for (const stu of matchedStudents) {
-    const stuLogs = AppState.scanHistory.filter(
-      (l) =>
-        String(l.Ensemble || '').toUpperCase() === stu.Ensemble.toUpperCase() &&
-        Number(l.Line_Number) === Number(stu.Line_Number)
-    );
-
-    const lastLog = stuLogs.length > 0 ? stuLogs[stuLogs.length - 1] : null;
-    const currentlyOut = lastLog && lastLog.Action === 'CHECK_OUT';
-
-    const lastOutLog = [...stuLogs].reverse().find((l) => l.Action === 'CHECK_OUT');
-    const lastInLog = [...stuLogs].reverse().find((l) => l.Action === 'CHECK_IN');
-
-    let historySummary = '';
-    if (currentlyOut) {
-      historySummary = `Currently has <strong>${lastLog.Section} #${lastLog.Case_ID}</strong> checked OUT since ${formatShortDate(lastLog.Timestamp)}`;
-    } else if (lastOutLog || lastInLog) {
-      const refInst = lastOutLog
-        ? `${lastOutLog.Section} #${lastOutLog.Case_ID}`
-        : `${lastInLog.Section} #${lastInLog.Case_ID}`;
-      const outTime = lastOutLog ? formatShortDate(lastOutLog.Timestamp) : '—';
-      const inTime = lastInLog ? formatShortDate(lastInLog.Timestamp) : '—';
-      historySummary = `Nothing currently checked out.<br>Last Instrument: <strong>${refInst}</strong><br>Out: ${outTime} &nbsp;|&nbsp; In: ${inTime}`;
-    } else {
-      historySummary = `Nothing checked out yet this term.`;
-    }
-
-    cardsHtml.push(`
-      <div class="result-card">
-        <div class="result-card-header">
-          <strong style="font-size:1.05rem;">👤 ${stu.Student_Name} (${stu.Ensemble} #${stu.Line_Number})</strong>
-          <span class="${currentlyOut ? 'badge-out' : 'badge-in'}">${currentlyOut ? 'HAS INSTRUMENT OUT' : 'ALL CHECKED IN'}</span>
-        </div>
-        <div style="font-size:0.84rem; color:#cbd5e1; line-height:1.4;">
-          Assigned: <strong>${stu.Section} #${stu.Assigned_Case_ID}</strong><br>
-          ${historySummary}
-        </div>
-      </div>
-    `);
-  }
-
-  UI.searchResultsContainer.innerHTML =
-    cardsHtml.length > 0
-      ? cardsHtml.join('')
-      : `<div style="color:var(--text-muted); text-align:center; padding:20px;">No matching students or instruments found.</div>`;
-}
-
-function formatShortDate(isoStr) {
-  try {
-    const d = new Date(isoStr);
-    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  } catch (_) {
-    return isoStr;
-  }
-}
-
-/* ============================================================================
- * 5. AVERY 60506 (2" x 2" - 12 PER SHEET) QR TAG & BRANDING GENERATOR
- * ============================================================================ */
-function renderAvery60506Sheets() {
-  const mode = UI.qrTypeSelect.value;
-  const ensFilter = UI.qrEnsembleSelect.value;
-  const schoolHeader = UI.qrSchoolHeaderInput.value.trim() || 'MS MUSIC PROGRAM';
-  const returnInfo = UI.qrReturnInfoInput.value.trim() || 'If found, return to Music Room';
-
-  localStorage.setItem(STORAGE_KEYS.SCHOOL_HEADER, schoolHeader);
-  localStorage.setItem(STORAGE_KEYS.RETURN_INFO, returnInfo);
-
-  const labelItems = [];
-
-  if (mode === 'SINGLE_INST' || mode === 'SINGLE_STU') {
-    const startSlot = Math.max(1, Math.min(12, parseInt(UI.qrStartSlotInput.value, 10) || 1));
-    for (let s = 1; s < startSlot; s++) {
-      labelItems.push({ emptySlot: true });
-    }
-
-    if (mode === 'SINGLE_INST') {
-      const sec = UI.qrInputPrimary.value.trim() || 'Trumpet';
-      const num = UI.qrInputSecondary.value.trim() || '1';
-      labelItems.push({
-        payload: `INST|${sec}|${num}`,
-        mainTitle: `${sec.toUpperCase()} #${num}`,
-        subTitle: ensFilter === 'ALL' ? 'School Instrument' : ensFilter
-      });
-    } else {
-      const name = UI.qrInputPrimary.value.trim() || 'Student';
-      const line = UI.qrInputSecondary.value.trim() || '1';
-      const ens = ensFilter === 'ALL' ? 'Band' : ensFilter;
-      labelItems.push({
-        payload: `STU|${ens}|${line}`,
-        mainTitle: `${ens.toUpperCase()} #${line}`,
-        subTitle: name
-      });
-    }
-  } else if (mode === 'FLAGGED_BAD_QR') {
-    // Automatically pull every unique instrument whose latest scan was flagged with [NEEDS QR TAG]
-    const flaggedSet = new Set();
-    for (const log of AppState.scanHistory) {
-      const key = `${String(log.Section || '').toUpperCase()}|${String(log.Case_ID || '').toUpperCase()}`;
-      if (String(log.Volunteer_Note || '').includes('[NEEDS QR TAG]')) {
-        flaggedSet.add(key);
-      } else if (flaggedSet.has(key)) {
-        // If it was subsequently scanned normally via QR, it no longer needs a tag!
-        flaggedSet.delete(key);
-      }
-    }
-
-    for (const key of flaggedSet) {
-      const [sec, num] = key.split('|');
-      const matchedInst = AppState.instrumentsList.find((i) => i.inst_key === key);
-      labelItems.push({
-        payload: `INST|${matchedInst ? matchedInst.Section : sec}|${matchedInst ? matchedInst.Case_ID : num}`,
-        mainTitle: `${sec} #${num}`,
-        subTitle: matchedInst ? `${matchedInst.Ensemble} • ${matchedInst.Assigned_Student}` : 'Replacement Tag'
-      });
-    }
-  } else if (mode === 'BATCH_INST') {
-    const list = AppState.instrumentsList.filter(
-      (i) => ensFilter === 'ALL' || i.Ensemble.toUpperCase() === ensFilter.toUpperCase()
-    );
-    for (const inst of list) {
-      labelItems.push({
-        payload: `INST|${inst.Section}|${inst.Case_ID}`,
-        mainTitle: `${inst.Section.toUpperCase()} #${inst.Case_ID}`,
-        subTitle: `${inst.Ensemble} • ${inst.Assigned_Student}`
-      });
-    }
-  } else if (mode === 'BATCH_STU') {
-    const list = AppState.rosterList.filter(
-      (s) => ensFilter === 'ALL' || s.Ensemble.toUpperCase() === ensFilter.toUpperCase()
-    );
-    for (const stu of list) {
-      labelItems.push({
-        payload: `STU|${stu.Ensemble}|${stu.Line_Number}`,
-        mainTitle: `${stu.Ensemble.toUpperCase()} #${stu.Line_Number}`,
-        subTitle: `${stu.Student_Name} (${stu.Section} #${stu.Assigned_Case_ID})`
-      });
-    }
-  } else if (mode === 'RETURN_ONLY') {
-    for (let i = 0; i < 12; i++) {
-      labelItems.push({ returnStickerOnly: true });
-    }
-  }
-
-  UI.qrPreviewGrid.innerHTML = '';
-
-  if (labelItems.length === 0) {
-    UI.qrPreviewGrid.innerHTML = `<div style="color:var(--text-muted); padding:24px; text-align:center;">
-      No flagged "Bad QR" cases found! All scanned tags are currently working.
-    </div>`;
-    return;
-  }
-
-  for (let i = 0; i < labelItems.length; i += 12) {
-    const pageSlice = labelItems.slice(i, i + 12);
-    const pageEl = document.createElement('div');
-    pageEl.className = 'avery-page';
-
-    for (const item of pageSlice) {
-      const cell = document.createElement('div');
-      cell.className = 'avery-label-cell';
-
-      if (item.emptySlot) {
-        cell.style.borderColor = 'transparent';
-        pageEl.appendChild(cell);
-        continue;
-      }
-
-      const headerBand = document.createElement('div');
-      headerBand.className = 'tag-header-band';
-
-      if (AppState.schoolLogoDataUrl) {
-        const logoImg = document.createElement('img');
-        logoImg.className = 'tag-logo-img';
-        logoImg.src = AppState.schoolLogoDataUrl;
-        headerBand.appendChild(logoImg);
-      }
-
-      const schoolBlock = document.createElement('div');
-      schoolBlock.className = 'tag-school-block';
-      schoolBlock.innerHTML = `
-        <div class="tag-school-name">${escapeHtml(schoolHeader)}</div>
-        <div class="tag-return-text">${escapeHtml(returnInfo)}</div>
-      `;
-      headerBand.appendChild(schoolBlock);
-      cell.appendChild(headerBand);
-
-      if (item.returnStickerOnly) {
-        const centerNotice = document.createElement('div');
-        centerNotice.style.padding = '8px 4px';
-        centerNotice.innerHTML = `
-          <div style="font-size:11pt; font-weight:900; margin-bottom:4px;">SCHOOL PROPERTY</div>
-          <div style="font-size:8pt; font-weight:700; line-height:1.25;">${escapeHtml(returnInfo)}</div>
-        `;
-        cell.appendChild(centerNotice);
-
-        const footerBand = document.createElement('div');
-        footerBand.className = 'tag-footer-band';
-        footerBand.innerHTML = `<div class="tag-sub-id">DO NOT REMOVE TAG FROM CASE</div>`;
-        cell.appendChild(footerBand);
-      } else {
-        const qrWrap = document.createElement('div');
-        qrWrap.className = 'tag-qr-wrap';
-        const canvas = document.createElement('canvas');
-        new QRious({
-          element: canvas,
-          value: item.payload,
-          size: 108,
-          level: 'H'
-        });
-        qrWrap.appendChild(canvas);
-        cell.appendChild(qrWrap);
-
-        const footerBand = document.createElement('div');
-        footerBand.className = 'tag-footer-band';
-        footerBand.innerHTML = `
-          <div class="tag-main-id">${escapeHtml(item.mainTitle)}</div>
-          <div class="tag-sub-id">${escapeHtml(item.subTitle)}</div>
-        `;
-        cell.appendChild(footerBand);
-      }
-
-      pageEl.appendChild(cell);
-    }
-
-    UI.qrPreviewGrid.appendChild(pageEl);
-  }
-}
-
-function escapeHtml(str) {
-  return String(str || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-/* ============================================================================
- * 6. WEB AUDIO, HAPTICS, & BACKGROUND QUEUE SYNC
- * ============================================================================ */
-function unlockAudio() {
-  if (!AppState.audioCtx) {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (AudioCtx) AppState.audioCtx = new AudioCtx();
-  }
-  if (AppState.audioCtx && AppState.audioCtx.state === 'suspended') {
-    AppState.audioCtx.resume();
-  }
-}
-
-function playTone(type) {
-  if (!AppState.audioCtx) return;
-  const ctx = AppState.audioCtx;
-  const now = ctx.currentTime;
-
-  if (type === 'MATCH') {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(880, now);
-    osc.frequency.setValueAtTime(1318.5, now + 0.07);
-    gain.gain.setValueAtTime(0.25, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.22);
-  } else {
-    for (let i = 0; i < 2; i++) {
-      const start = now + i * 0.16;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(220, start);
-      gain.gain.setValueAtTime(0.25, start);
-      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.12);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(start);
-      osc.stop(start + 0.12);
-    }
-  }
-}
-
-function vibrateDevice(type) {
-  if ('vibrate' in navigator) {
-    try {
-      navigator.vibrate(type === 'MATCH' ? 70 : [140, 70, 140]);
-    } catch (_) {}
-  }
-}
-
-async function flushOutboundQueue() {
-  if (AppState.isSyncing || !navigator.onLine || !AppState.userPin) {
-    updateSyncBadge();
-    return;
-  }
-  const gasUrl = getGasUrl();
-  if (!gasUrl) return;
-
-  const pending = await window.TrackerDB.getAllStore('sync_queue');
-  if (pending.length === 0) {
-    updateSyncBadge();
-    return;
-  }
-
-  AppState.isSyncing = true;
-  updateSyncBadge();
-
-  try {
-    for (const item of pending) {
-      if (!navigator.onLine) break;
-      item.Auth_PIN = item.Auth_PIN || AppState.userPin;
-      const response = await fetch(gasUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(item),
-        redirect: 'follow'
-      });
-      if (response.ok) {
-        const resJson = await response.json();
-        if (resJson.status !== 'UNAUTHORIZED') {
-          await window.TrackerDB.removeQueueItem(item.local_id);
-        } else {
-          break;
-        }
-      } else {
-        break;
-      }
-    }
-  } catch (err) {
-    console.warn('Queue sync paused (offline):', err);
-  } finally {
-    AppState.isSyncing = false;
-    updateSyncBadge();
-  }
-}
-
-async function updateSyncBadge() {
-  const pending = await window.TrackerDB.getAllStore('sync_queue');
-  const count = pending.length;
-  UI.queueCountText.textContent = count;
-  UI.syncBadge.classList.remove('pending', 'offline');
-
-  if (!navigator.onLine) {
-    UI.syncBadge.classList.add('offline');
-    UI.syncText.textContent = `Offline (${count})`;
-  } else if (count > 0) {
-    UI.syncBadge.classList.add('pending');
-    UI.syncText.textContent = `Syncing (${count})`;
-  } else {
-    UI.syncText.textContent = 'Synced';
-  }
-}
-
-/* ============================================================================
- * 7. UI NAVIGATION & EVENT LISTENERS
- * ============================================================================ */
-function applyModeUI(mode) {
-  AppState.actionMode = mode;
-  localStorage.setItem(STORAGE_KEYS.ACTION_MODE, mode);
-  UI.btnModeIn.classList.toggle('active-in', mode === 'CHECK_IN');
-  UI.btnModeOut.classList.toggle('active-out', mode === 'CHECK_OUT');
-}
-
-function bindEvents() {
-  UI.btnLoginSubmit.addEventListener('click', handleLoginAttempt);
-  UI.loginPinInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') handleLoginAttempt();
-  });
-
-  UI.userBadgeBtn.addEventListener('click', showLoginScreen);
-
-  UI.navTabs.forEach((tab) => {
-    tab.addEventListener('click', () => {
-      if (tab.dataset.view === 'viewQr' && AppState.userRole !== 'ADMIN') {
-        alert('🔒 The QR Tag Generator requires the Director Admin PIN. Tap your name badge in the top bar to switch to the Admin PIN.');
-        return;
-      }
-
-      UI.navTabs.forEach((t) => t.classList.remove('active'));
-      UI.views.forEach((v) => v.classList.remove('active'));
-      tab.classList.add('active');
-      document.getElementById(tab.dataset.view).classList.add('active');
-
-      if (tab.dataset.view === 'viewSearch') {
-        runStatusSearch(UI.searchInput.value);
-      } else if (tab.dataset.view === 'viewQr') {
-        renderAvery60506Sheets();
-      }
-    });
-  });
-
-  UI.btnModeIn.addEventListener('click', () => applyModeUI('CHECK_IN'));
-  UI.btnModeOut.addEventListener('click', () => applyModeUI('CHECK_OUT'));
-
-  UI.ensembleFilterGroup.addEventListener('click', (e) => {
-    const btn = e.target.closest('.pill-btn');
-    if (!btn) return;
-    UI.ensembleFilterGroup.querySelectorAll('.pill-btn').forEach((b) => b.classList.remove('active-ens'));
-    btn.classList.add('active-ens');
-    AppState.ensembleFilter = btn.dataset.ens;
-    lookupByLineNumber(AppState.currentInput);
-  });
-
-  UI.keypadGrid.addEventListener('click', (e) => {
-    const btn = e.target.closest('.key-btn');
-    if (btn) handleKeypad(btn.dataset.key);
-  });
-
-  // Manual Case / Bad QR Modal Bindings
-  UI.btnManualCase.addEventListener('click', openManualCaseModal);
-  UI.btnCancelManual.addEventListener('click', () => UI.manualCaseModal.classList.remove('open'));
-
-  UI.btnQuickConfirmAssigned.addEventListener('click', async () => {
-    if (!AppState.activeStudent) return;
-    UI.manualCaseModal.classList.remove('open');
-    await evaluateAndLogInstrumentScan(
-      AppState.activeStudent.Section,
-      AppState.activeStudent.Assigned_Case_ID,
-      '[NEEDS QR TAG] Manual Entry - Damaged/Missing QR'
-    );
-  });
-
-  UI.btnSubmitManual.addEventListener('click', async () => {
-    const sec = UI.manualSectionInput.value.trim();
-    const num = UI.manualCaseNumInput.value.trim();
-    if (!sec || !num) {
-      alert('Please enter both Instrument Section (e.g. Trumpet) and Case #.');
-      return;
-    }
-    const note = UI.chkFlagBadQr.checked
-      ? '[NEEDS QR TAG] Manual Entry - Damaged/Missing QR'
-      : 'Manual Entry';
-    UI.manualCaseModal.classList.remove('open');
-    await evaluateAndLogInstrumentScan(sec, num, note);
-  });
-
-  UI.btnLinkSchoolId.addEventListener('click', () => {
-    AppState.awaitingIdLink = !AppState.awaitingIdLink;
-    UI.btnLinkSchoolId.textContent = AppState.awaitingIdLink ? '📷 Scan ID...' : '🔗 Link ID';
-  });
-
-  UI.btnNextStudent.addEventListener('click', () => resetScannerState());
-  UI.btnAddNote.addEventListener('click', () => {
-    UI.noteInput.value = '';
-    UI.noteModal.classList.add('open');
-  });
-
-  document.querySelectorAll('.note-chip').forEach((chip) => {
-    chip.addEventListener('click', () => {
-      UI.noteInput.value = chip.dataset.note;
-    });
-  });
-
-  UI.btnCancelNote.addEventListener('click', () => UI.noteModal.classList.remove('open'));
-  UI.btnSaveNote.addEventListener('click', async () => {
-    const noteText = UI.noteInput.value.trim();
-    UI.noteModal.classList.remove('open');
-    if (noteText && AppState.lastTransaction) {
-      const updated = await window.TrackerDB.updateQueuedNote(AppState.lastTransaction.local_id, noteText);
-      if (!updated) {
-        const followUp = { ...AppState.lastTransaction, Volunteer_Note: `[NOTE] ${noteText}` };
-        delete followUp.local_id;
-        await window.TrackerDB.enqueueItem(followUp);
-      }
-      flushOutboundQueue();
-    }
-    resetScannerState();
-  });
-
-  UI.searchInput.addEventListener('input', (e) => runStatusSearch(e.target.value));
-
-  UI.chkShowCutLines.addEventListener('change', (e) => {
-    UI.qrPreviewGrid.classList.toggle('hide-cut-lines', !e.target.checked);
-  });
-
-  UI.qrTypeSelect.addEventListener('change', () => {
-    const isSingle = UI.qrTypeSelect.value.startsWith('SINGLE_');
-    UI.qrSingleInputs.style.display = isSingle ? 'grid' : 'none';
-    if (UI.qrTypeSelect.value === 'SINGLE_STU') {
-      UI.qrInputPrimary.placeholder = 'Student Name (e.g. Joe Band)';
-      UI.qrInputSecondary.placeholder = 'Line # (e.g. 1)';
-    } else {
-      UI.qrInputPrimary.placeholder = 'Instrument (e.g. Trumpet)';
-      UI.qrInputSecondary.placeholder = 'Case # (e.g. 7)';
-    }
-    renderAvery60506Sheets();
-  });
-
-  UI.qrEnsembleSelect.addEventListener('change', renderAvery60506Sheets);
-  UI.qrSchoolHeaderInput.addEventListener('input', renderAvery60506Sheets);
-  UI.qrReturnInfoInput.addEventListener('input', renderAvery60506Sheets);
-  UI.qrInputPrimary.addEventListener('input', renderAvery60506Sheets);
-  UI.qrInputSecondary.addEventListener('input', renderAvery60506Sheets);
-  UI.qrStartSlotInput.addEventListener('input', renderAvery60506Sheets);
-
-  UI.qrLogoFileInput.addEventListener('change', (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      AppState.schoolLogoDataUrl = ev.target.result;
-      localStorage.setItem(STORAGE_KEYS.SCHOOL_LOGO, AppState.schoolLogoDataUrl);
-      UI.btnClearLogo.style.display = 'inline-block';
-      renderAvery60506Sheets();
-    };
-    reader.readAsDataURL(file);
-  });
-
-  UI.btnClearLogo.addEventListener('click', () => {
-    AppState.schoolLogoDataUrl = '';
-    localStorage.removeItem(STORAGE_KEYS.SCHOOL_LOGO);
-    UI.qrLogoFileInput.value = '';
-    UI.btnClearLogo.style.display = 'none';
-    renderAvery60506Sheets();
-  });
-
-  UI.btnPrintQr.addEventListener('click', () => window.print());
-
-  UI.syncBadge.addEventListener('click', () => syncWithServer(false));
-  UI.btnSettings.addEventListener('click', () => {
-    UI.gasUrlInput.value = getGasUrl();
-    UI.settingsModal.classList.add('open');
-  });
-  UI.btnCloseSettings.addEventListener('click', () => UI.settingsModal.classList.remove('open'));
-  UI.btnSaveSettings.addEventListener('click', async () => {
-    const url = UI.gasUrlInput.value.trim();
-    if (url) {
-      localStorage.setItem(STORAGE_KEYS.GAS_URL, url);
-      UI.settingsModal.classList.remove('open');
-      await syncWithServer(true);
-    }
-  });
-  UI.btnReloadRoster.addEventListener('click', async () => {
-    const url = UI.gasUrlInput.value.trim();
-    if (url) localStorage.setItem(STORAGE_KEYS.GAS_URL, url);
-    await syncWithServer(true);
-  });
-}
+    const lastNote = lastLog ? String(lastLog.Volunteer_Note || '').toLowerCase() : '';
+    const lastFlag = lastLog ? String(lastLog.Status_Flag || '').toLowerCase() : '';
+
+    return (
+      combo1.includes(q) ||
+      combo2.includes(q) ||
+      assigned.includes(q) ||
+      lastNote.includes(q) ||
+      lastFlag.includes(q
