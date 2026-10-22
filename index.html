@@ -48,7 +48,7 @@
       flex-direction: column;
     }
 
-    /* --- LOGIN / LOCK SCREEN OVERLAY --- */
+    /* --- STREAMLINED LOGIN OVERLAY (NAME & PIN ONLY) --- */
     .login-overlay {
       position: fixed;
       inset: 0;
@@ -67,11 +67,11 @@
       border: 1px solid #334155;
       border-radius: 16px;
       width: 100%;
-      max-width: 390px;
+      max-width: 380px;
       padding: 22px;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 14px;
       box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
     }
 
@@ -133,7 +133,7 @@
       color: #cbd5e1;
       border: 1px solid #475569;
       cursor: pointer;
-      max-width: 110px;
+      max-width: 115px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -181,7 +181,7 @@
       justify-content: space-between;
       align-items: center;
       padding: 6px 10px;
-      gap: 8px;
+      gap: 6px;
       flex-shrink: 0;
     }
 
@@ -197,9 +197,9 @@
       border: none;
       background: transparent;
       color: var(--text-muted);
-      font-size: 0.74rem;
+      font-size: 0.72rem;
       font-weight: 700;
-      padding: 5px 9px;
+      padding: 5px 8px;
       border-radius: 6px;
       cursor: pointer;
     }
@@ -207,6 +207,7 @@
     .pill-btn.active-in { background: var(--accent-checkin); color: #fff; }
     .pill-btn.active-out { background: var(--accent-checkout); color: #fff; }
     .pill-btn.active-ens { background: #0ea5e9; color: #fff; }
+    .pill-btn.repair-pill.active-ens { background: #d97706; color: #fff; }
 
     /* --- SCANNER WORKSPACE --- */
     .workspace {
@@ -231,6 +232,7 @@
     }
 
     .student-card.ready-to-scan { border-color: #38bdf8; }
+    .student-card.repair-active { border-color: #f59e0b; }
 
     .line-display-row {
       display: flex;
@@ -485,6 +487,16 @@
       font-weight: 800;
     }
 
+    .badge-repair {
+      background: #581c87;
+      color: #e9d5ff;
+      border: 1px solid #9333ea;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      font-weight: 800;
+    }
+
     .badge-in {
       background: #064e3b;
       color: #6ee7b7;
@@ -647,8 +659,10 @@
       border: 1px solid #475569;
       border-radius: var(--border-radius);
       width: 100%;
-      max-width: 400px;
+      max-width: 410px;
       padding: 16px;
+      max-height: 92dvh;
+      overflow-y: auto;
     }
 
     .btn-primary {
@@ -683,6 +697,15 @@
       border-radius: 8px;
       font-weight: 600;
       cursor: pointer;
+    }
+
+    .invoice-upload-box {
+      border: 1.5px dashed #38bdf8;
+      background: rgba(56, 189, 248, 0.08);
+      border-radius: 10px;
+      padding: 10px;
+      text-align: center;
+      margin-bottom: 12px;
     }
 
     @page {
@@ -728,7 +751,9 @@
 </head>
 <body>
 
-  <!-- LOGIN LOCK SCREEN -->
+  <!-- ====================================================================
+       STREAMLINED LOGIN SCREEN (NAME & PIN ONLY)
+       ==================================================================== -->
   <div id="loginOverlay" class="login-overlay">
     <div class="login-card">
       <div style="text-align:center;">
@@ -738,18 +763,13 @@
       </div>
 
       <div>
-        <label class="field-label" for="loginNameInput">Your Name (Logged with Scans)</label>
+        <label class="field-label" for="loginNameInput">Your Name</label>
         <input id="loginNameInput" class="form-input" type="text" placeholder="e.g. Sarah M. or Mr. Davis">
       </div>
 
       <div>
-        <label class="field-label" for="loginPinInput">Access PIN (Volunteer or Director)</label>
+        <label class="field-label" for="loginPinInput">Access PIN</label>
         <input id="loginPinInput" class="form-input" type="password" inputmode="numeric" placeholder="Enter 4-to-6 digit PIN">
-      </div>
-
-      <div id="loginApiBox">
-        <label class="field-label" for="loginGasUrlInput">Google Apps Script Web App URL</label>
-        <input id="loginGasUrlInput" class="form-input" type="url" placeholder="https://script.google.com/macros/s/.../exec">
       </div>
 
       <div id="loginErrorMsg" style="color:#fca5a5; font-size:0.8rem; font-weight:700; display:none; text-align:center;"></div>
@@ -787,6 +807,7 @@
         <button class="pill-btn active-ens" data-ens="ALL" type="button">All</button>
         <button class="pill-btn" data-ens="Band" type="button">Band</button>
         <button class="pill-btn" data-ens="Orchestra" type="button">Orch</button>
+        <button class="pill-btn repair-pill" data-ens="REPAIR" type="button">🔧 Repair (#900)</button>
       </div>
     </div>
 
@@ -799,7 +820,7 @@
 
         <div id="studentDetailsBox">
           <div id="studentName" class="student-name">Type Line # or Scan ID</div>
-          <div id="studentMeta" class="student-meta">Camera scans Student IDs & Cases</div>
+          <div id="studentMeta" class="student-meta">Use #900 for Instrument Repairs</div>
         </div>
 
         <div id="candidateList" class="candidate-list" style="display:none;"></div>
@@ -811,7 +832,6 @@
               <div id="expectedCase" class="expected-id">—</div>
             </div>
           </div>
-          <!-- Action buttons for Linking School ID or Manual Override when QR is damaged -->
           <div id="studentActionButtons" class="card-action-row" style="display:none;">
             <button id="btnManualCase" class="mini-action-btn warn-accent" type="button">⌨️ Manual / Bad QR</button>
             <button id="btnLinkSchoolId" class="mini-action-btn" type="button">🔗 Link ID</button>
@@ -856,7 +876,7 @@
   <!-- VIEW 2: LIVE STATUS & HISTORY SEARCH -->
   <div id="viewSearch" class="view-panel">
     <div class="scroll-view">
-      <input id="searchInput" class="search-input" type="search" placeholder='Search e.g. "Trumpet 1", "Viola", "Joe", or "Needs QR"...'>
+      <input id="searchInput" class="search-input" type="search" placeholder='Search "Trumpet 1", "Joe", "Repair", or "Needs QR"...'>
       <div id="searchResultsContainer" style="display:flex; flex-direction:column; gap:8px;"></div>
     </div>
   </div>
@@ -878,6 +898,7 @@
             <select id="qrTypeSelect" class="form-select">
               <option value="BATCH_INST">All Roster Instruments (Batch)</option>
               <option value="FLAGGED_BAD_QR">🔧 Flagged "Bad QR" Cases Only (Auto-Queue)</option>
+              <option value="REPAIR_SHOP_QR">🛠️ Repair Shop Pass QR Card (#900)</option>
               <option value="SINGLE_INST">Single Replacement Instrument Tag</option>
               <option value="BATCH_STU">All Roster Students (Batch)</option>
               <option value="SINGLE_STU">Single Student Badge QR</option>
@@ -919,7 +940,7 @@
         <div id="qrSingleInputs" class="form-row" style="display:none;">
           <input id="qrInputPrimary" class="form-input" type="text" placeholder="Instrument (e.g. Trumpet)">
           <input id="qrInputSecondary" class="form-input" type="text" placeholder="Case # (e.g. 7)">
-          <input id="qrStartSlotInput" class="form-input" type="number" min="1" max="12" value="1" placeholder="Start on Label # (1-12)" title="Skip already-used stickers on a partial Avery 60506 sheet!">
+          <input id="qrStartSlotInput" class="form-input" type="number" min="1" max="12" value="1" placeholder="Start on Label # (1-12)">
         </div>
       </div>
 
@@ -928,19 +949,73 @@
   </div>
 
   <!-- ====================================================================
-       MANUAL INSTRUMENT OVERRIDE / DAMAGED QR MODAL
+       INSTRUMENT REPAIR CHECK-OUT / CHECK-IN + INVOICE SCANNER MODAL
        ==================================================================== -->
+  <div id="repairModal" class="modal-backdrop">
+    <div class="modal-box">
+      <div id="repairModalTitle" style="font-weight:900; font-size:1.1rem; color:#fbbf24; margin-bottom:4px;">
+        🔧 Send Instrument to Repair
+      </div>
+      <div id="repairInstrumentLabel" style="font-size:0.9rem; font-weight:700; margin-bottom:10px; color:#fff;">
+        Trumpet #1
+      </div>
+
+      <label class="field-label" for="repairShopInput">Repair Shop / Vendor</label>
+      <input id="repairShopInput" class="form-input" type="text" value="Repair Shop (#900)" style="margin-bottom:10px;">
+
+      <label class="field-label">Quick Issue / Work Tags:</label>
+      <div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px;">
+        <button class="btn-secondary repair-chip" data-text="Stuck Valve / Slide" type="button" style="font-size:0.74rem; padding:6px 8px;">Stuck Valve/Slide</button>
+        <button class="btn-secondary repair-chip" data-text="Pad / Cork / Spring" type="button" style="font-size:0.74rem; padding:6px 8px;">Pad/Cork</button>
+        <button class="btn-secondary repair-chip" data-text="Bridge / Peg / String" type="button" style="font-size:0.74rem; padding:6px 8px;">Bridge/String</button>
+        <button class="btn-secondary repair-chip" data-text="Solder / Dent Work" type="button" style="font-size:0.74rem; padding:6px 8px;">Solder/Dent</button>
+        <button class="btn-secondary repair-chip" data-text="Ultrasonic Clean & Tune" type="button" style="font-size:0.74rem; padding:6px 8px;">Clean/Tune</button>
+      </div>
+
+      <label id="repairDetailsLabel" class="field-label" for="repairDetailsInput">Issue / Reason for Repair</label>
+      <input id="repairDetailsInput" class="form-input" type="text" placeholder="Describe issue or work performed..." style="margin-bottom:10px;">
+
+      <!-- Post-Repair Return Fields (Shown when checking BACK IN from repair) -->
+      <div id="repairReturnFields" style="display:none;">
+        <div class="form-row" style="margin-bottom:10px;">
+          <div>
+            <label class="field-label" for="repairCostInput">Repair Cost ($)</label>
+            <input id="repairCostInput" class="form-input" type="number" step="0.01" placeholder="e.g. 45.00">
+          </div>
+          <div>
+            <label class="field-label" for="repairInvoiceNumInput">Invoice / PO #</label>
+            <input id="repairInvoiceNumInput" class="form-input" type="text" placeholder="e.g. INV-1042">
+          </div>
+        </div>
+
+        <!-- Admin-Only Invoice Document / Camera Scanner -->
+        <div id="adminInvoiceBox" class="invoice-upload-box">
+          <div style="font-size:0.8rem; font-weight:800; color:#38bdf8; margin-bottom:6px;">
+            📸 Scan or Attach Repair Invoice (Saves to Google Drive)
+          </div>
+          <input id="invoiceFileInput" type="file" accept="image/*,application/pdf" capture="environment" style="font-size:0.78rem; color:#cbd5e1; width:100%;">
+          <div id="invoicePreviewText" style="font-size:0.74rem; color:#6ee7b7; margin-top:6px; display:none;"></div>
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button id="btnCancelRepair" class="btn-secondary" type="button">Cancel</button>
+        <button id="btnSubmitRepair" class="btn-primary" type="button">Save Repair Log</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MANUAL INSTRUMENT OVERRIDE / DAMAGED QR MODAL -->
   <div id="manualCaseModal" class="modal-backdrop">
     <div class="modal-box">
       <div style="font-weight:800; font-size:1.05rem; margin-bottom:10px;">⌨️ Manual Entry (Damaged / Missing QR)</div>
 
-      <!-- 1-Tap Fast Confirm for Assigned Instrument -->
       <button id="btnQuickConfirmAssigned" class="btn-success-large" type="button">
         ✓ Log Assigned: Trumpet #1 (Flag Bad QR)
       </button>
 
       <div style="font-size:0.76rem; color:var(--text-muted); text-transform:uppercase; font-weight:700; margin-bottom:8px; text-align:center;">
-        — OR Enter a Different Case —
+        — OR Enter Instrument & Case # —
       </div>
 
       <div class="form-row" style="margin-bottom:10px;">
@@ -962,7 +1037,7 @@
 
       <div style="display:flex; justify-content:flex-end; gap:8px;">
         <button id="btnCancelManual" class="btn-secondary" type="button">Cancel</button>
-        <button id="btnSubmitManual" class="btn-primary" type="button">Log Manual Case</button>
+        <button id="btnSubmitManual" class="btn-primary" type="button">Continue</button>
       </div>
     </div>
   </div>
