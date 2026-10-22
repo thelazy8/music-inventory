@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="BandScan">
+  <title>Music Inventory System</title>
+
+  <link rel="manifest" href="./manifest.json">
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+
+  <style>
+    :root {
+      --bg-dark: #0f172a;
+      --bg-card: #1e293b;
+      --bg-key: #334155;
+      --bg-key-active: #475569;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent-checkin: #0284c7;
+      --accent-checkout: #7c3aed;
+      --status-match: #16a34a;
+      --status-swap: #d97706;
+      --border-radius: 12px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      height: 100dvh;
+      width: 100vw;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* --- LOGIN / LOCK SCREEN OVERLAY --- */
+    .login-overlay {
+      position: fixed;
+      inset: 0;
+      background: var(--bg-dark);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .login-overlay.hidden { display: none; }
+
+    .login-card {
+      background: var(--bg-card);
+      border: 1px solid #334155;
+      border-radius: 16px;
+      width: 100%;
+      max-width: 390px;
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+    }
+
+    .field-label {
+      font-size: 0.76rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 4px;
+      display: block;
+    }
+
+    /* --- TOP HEADER & NAV --- */
+    .top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      background: var(--bg-card);
+      border-bottom: 1px solid #334155;
+      flex-shrink: 0;
+    }
+
+    .nav-tabs {
+      display: flex;
+      gap: 4px;
+      background: var(--bg-dark);
+      padding: 3px;
+      border-radius: 8px;
+    }
+
+    .nav-tab {
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-weight: 700;
+      font-size: 0.76rem;
+      padding: 6px 9px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .nav-tab.active { background: #334155; color: #fff; }
+    .nav-tab.admin-locked { opacity: 0.45; }
+
+    .status-cluster {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .user-pill {
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 5px 8px;
+      border-radius: 8px;
+      background: #1e293b;
+      color: #cbd5e1;
+      border: 1px solid #475569;
+      cursor: pointer;
+      max-width: 110px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sync-pill {
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 5px 8px;
+      border-radius: 999px;
+      background: #064e3b;
+      color: #6ee7b7;
+      cursor: pointer;
+      border: 1px solid #047857;
+    }
+
+    .sync-pill.pending { background: #78350f; color: #fcd34d; border-color: #b45309; }
+    .sync-pill.offline { background: #7f1d1d; color: #fca5a5; border-color: #b91c1c; }
+
+    .icon-btn {
+      background: var(--bg-key);
+      border: none;
+      color: var(--text-main);
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    /* --- VIEW CONTAINERS --- */
+    .view-panel {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .view-panel.active { display: flex; }
+
+    /* --- SUB-BAR (MODE & ENSEMBLE FILTER) --- */
+    .sub-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .pill-group {
+      display: flex;
+      background: var(--bg-card);
+      padding: 3px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+    }
+
+    .pill-btn {
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 0.74rem;
+      font-weight: 700;
+      padding: 5px 9px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .pill-btn.active-in { background: var(--accent-checkin); color: #fff; }
+    .pill-btn.active-out { background: var(--accent-checkout); color: #fff; }
+    .pill-btn.active-ens { background: #0ea5e9; color: #fff; }
+
+    /* --- SCANNER WORKSPACE --- */
+    .workspace {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 8px;
+      padding: 0 10px 8px 10px;
+      min-height: 0;
+      position: relative;
+    }
+
+    .student-card {
+      background: var(--bg-card);
+      border-radius: var(--border-radius);
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      border: 2px solid #334155;
+      overflow-y: auto;
+    }
+
+    .student-card.ready-to-scan { border-color: #38bdf8; }
+
+    .line-display-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+    }
+
+    .line-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      font-weight: 700;
+    }
+
+    .line-number-value {
+      font-size: 2.1rem;
+      font-weight: 900;
+      color: #38bdf8;
+      line-height: 1;
+    }
+
+    .student-name {
+      font-size: 1.05rem;
+      font-weight: 800;
+      line-height: 1.2;
+      color: var(--text-main);
+    }
+
+    .student-meta {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .candidate-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin: 4px 0;
+    }
+
+    .candidate-btn {
+      background: var(--bg-dark);
+      border: 1px solid #475569;
+      border-radius: 8px;
+      padding: 7px 8px;
+      text-align: left;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    .candidate-btn.selected {
+      border-color: #38bdf8;
+      background: rgba(56, 189, 248, 0.15);
+    }
+
+    .expected-case-box {
+      background: var(--bg-dark);
+      padding: 7px 8px;
+      border-radius: 8px;
+      border-left: 4px solid #38bdf8;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .expected-top-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .expected-label {
+      font-size: 0.63rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+
+    .expected-id {
+      font-size: 0.98rem;
+      font-weight: 800;
+      color: #fff;
+    }
+
+    .card-action-row {
+      display: flex;
+      gap: 5px;
+    }
+
+    .mini-action-btn {
+      flex: 1;
+      font-size: 0.68rem;
+      background: #334155;
+      color: #38bdf8;
+      border: 1px solid #475569;
+      padding: 5px 6px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .mini-action-btn.warn-accent {
+      color: #fcd34d;
+      border-color: #b45309;
+      background: rgba(180, 83, 9, 0.2);
+    }
+
+    .camera-card {
+      background: #000;
+      border-radius: var(--border-radius);
+      overflow: hidden;
+      position: relative;
+      border: 2px solid #334155;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .camera-card.active-target { border-color: #22c55e; }
+    #reader { width: 100%; height: 100%; }
+    #reader video { width: 100% !important; height: 100% !important; object-fit: cover !important; }
+
+    .camera-status-badge {
+      position: absolute;
+      bottom: 6px;
+      left: 6px;
+      right: 6px;
+      background: rgba(15, 23, 42, 0.88);
+      color: #38bdf8;
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-align: center;
+      padding: 4px 6px;
+      border-radius: 6px;
+      pointer-events: none;
+    }
+
+    /* --- RESULT BANNER OVERLAY --- */
+    .result-banner {
+      position: absolute;
+      inset: 0 10px 8px 10px;
+      border-radius: var(--border-radius);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 14px;
+      z-index: 20;
+      opacity: 0;
+      pointer-events: none;
+      transform: scale(0.96);
+      transition: opacity 0.12s ease, transform 0.12s ease;
+    }
+
+    .result-banner.visible { opacity: 1; pointer-events: auto; transform: scale(1); }
+    .result-banner.match { background: var(--status-match); color: #fff; }
+    .result-banner.swap { background: var(--status-swap); color: #fff; }
+
+    .result-title { font-size: 1.3rem; font-weight: 900; margin-top: 4px; }
+    .result-subtitle { font-size: 0.9rem; font-weight: 600; margin-top: 4px; }
+
+    .banner-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .banner-btn {
+      background: rgba(0, 0, 0, 0.3);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.45);
+      padding: 7px 12px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 0.82rem;
+      cursor: pointer;
+    }
+
+    /* --- KEYPAD --- */
+    .keypad-section {
+      padding: 0 10px 10px 10px;
+      flex-shrink: 0;
+      height: 43dvh;
+      max-height: 340px;
+      display: flex;
+    }
+
+    .keypad-grid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(4, 1fr);
+      gap: 7px;
+    }
+
+    .key-btn {
+      background: var(--bg-key);
+      color: var(--text-main);
+      border: 1px solid #475569;
+      border-radius: 10px;
+      font-size: 1.55rem;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .key-btn:active { background: var(--bg-key-active); transform: scale(0.97); }
+    .key-btn.key-clear { background: #7f1d1d; border-color: #991b1b; color: #fecaca; font-size: 1.05rem; }
+    .key-btn.key-back { background: #1e293b; font-size: 1.3rem; }
+
+    /* --- VIEW 2: SEARCH & LIVE STATUS --- */
+    .scroll-view {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .search-input {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 2px solid #38bdf8;
+      background: var(--bg-card);
+      color: #fff;
+      font-size: 1rem;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .result-card {
+      background: var(--bg-card);
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .result-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .badge-out {
+      background: #7c2d12;
+      color: #fdba74;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      font-weight: 800;
+    }
+
+    .badge-in {
+      background: #064e3b;
+      color: #6ee7b7;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      font-weight: 800;
+    }
+
+    /* --- VIEW 3: AVERY 60506 QR CODE GENERATOR --- */
+    .qr-controls {
+      background: var(--bg-card);
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .form-select, .form-input {
+      width: 100%;
+      padding: 9px;
+      border-radius: 8px;
+      border: 1px solid #475569;
+      background: var(--bg-dark);
+      color: #fff;
+      font-size: 0.86rem;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .avery-sheet-container {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .avery-page {
+      display: grid;
+      grid-template-columns: repeat(3, 2in);
+      grid-auto-rows: 2in;
+      column-gap: 0.625in;
+      row-gap: 0.583in;
+      background: #fff;
+      padding: 0.625in;
+      border-radius: 8px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+    }
+
+    .avery-label-cell {
+      width: 2in;
+      height: 2in;
+      background: #fff;
+      color: #000;
+      border: 1px dashed #cbd5e1;
+      border-radius: 4px;
+      padding: 0.06in;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      text-align: center;
+      overflow: hidden;
+    }
+
+    .avery-sheet-container.hide-cut-lines .avery-label-cell {
+      border-color: transparent;
+    }
+
+    .tag-header-band {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      border-bottom: 1.5px solid #000;
+      padding-bottom: 2px;
+      min-height: 0.28in;
+    }
+
+    .tag-logo-img {
+      max-height: 0.24in;
+      max-width: 0.35in;
+      object-fit: contain;
+    }
+
+    .tag-school-block {
+      display: flex;
+      flex-direction: column;
+      line-height: 1.05;
+    }
+
+    .tag-school-name {
+      font-size: 7.5pt;
+      font-weight: 900;
+      color: #000;
+      text-transform: uppercase;
+    }
+
+    .tag-return-text {
+      font-size: 5.8pt;
+      font-weight: 700;
+      color: #222;
+    }
+
+    .tag-qr-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 1px 0;
+    }
+
+    .tag-footer-band {
+      width: 100%;
+      border-top: 1.5px solid #000;
+      padding-top: 1px;
+      line-height: 1.05;
+    }
+
+    .tag-main-id {
+      font-size: 11pt;
+      font-weight: 900;
+      color: #000;
+      letter-spacing: 0.01em;
+    }
+
+    .tag-sub-id {
+      font-size: 6.8pt;
+      font-weight: 700;
+      color: #333;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* --- MODALS --- */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.78);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 50;
+    }
+
+    .modal-backdrop.open { display: flex; }
+
+    .modal-box {
+      background: var(--bg-card);
+      border: 1px solid #475569;
+      border-radius: var(--border-radius);
+      width: 100%;
+      max-width: 400px;
+      padding: 16px;
+    }
+
+    .btn-primary {
+      background: #0284c7;
+      color: #fff;
+      border: none;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .btn-success-large {
+      background: #16a34a;
+      color: #fff;
+      border: 1px solid #22c55e;
+      padding: 12px 14px;
+      border-radius: 10px;
+      font-weight: 900;
+      font-size: 0.95rem;
+      width: 100%;
+      cursor: pointer;
+      margin-bottom: 12px;
+      text-align: center;
+    }
+
+    .btn-secondary {
+      background: var(--bg-key);
+      color: var(--text-main);
+      border: none;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    @page {
+      size: 8.5in 11in;
+      margin: 0in;
+    }
+
+    @media print {
+      html, body {
+        width: 8.5in !important;
+        height: auto !important;
+        background: #fff !important;
+        color: #000 !important;
+        overflow: visible !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+      .login-overlay, .top-bar, #viewScanner, #viewSearch, .qr-controls, .modal-backdrop {
+        display: none !important;
+      }
+      #viewQr, .scroll-view, .avery-sheet-container {
+        display: block !important;
+        overflow: visible !important;
+        padding: 0 !important;
+        margin: 0 !important;
+      }
+      .avery-page {
+        width: 8.5in !important;
+        height: 11in !important;
+        padding: 0.625in !important;
+        display: grid !important;
+        grid-template-columns: repeat(3, 2in) !important;
+        grid-template-rows: repeat(4, 2in) !important;
+        column-gap: 0.625in !important;
+        row-gap: 0.5833in !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        page-break-after: always !important;
+        break-after: page !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- LOGIN LOCK SCREEN -->
+  <div id="loginOverlay" class="login-overlay">
+    <div class="login-card">
+      <div style="text-align:center;">
+        <div style="font-size:2.2rem;">🎺</div>
+        <h1 style="font-size:1.25rem; font-weight:900; margin-top:4px;">Music Inventory Login</h1>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-top:2px;">Enter your name and Band Room PIN</p>
+      </div>
+
+      <div>
+        <label class="field-label" for="loginNameInput">Your Name (Logged with Scans)</label>
+        <input id="loginNameInput" class="form-input" type="text" placeholder="e.g. Sarah M. or Mr. Davis">
+      </div>
+
+      <div>
+        <label class="field-label" for="loginPinInput">Access PIN (Volunteer or Director)</label>
+        <input id="loginPinInput" class="form-input" type="password" inputmode="numeric" placeholder="Enter 4-to-6 digit PIN">
+      </div>
+
+      <div id="loginApiBox">
+        <label class="field-label" for="loginGasUrlInput">Google Apps Script Web App URL</label>
+        <input id="loginGasUrlInput" class="form-input" type="url" placeholder="https://script.google.com/macros/s/.../exec">
+      </div>
+
+      <div id="loginErrorMsg" style="color:#fca5a5; font-size:0.8rem; font-weight:700; display:none; text-align:center;"></div>
+
+      <button id="btnLoginSubmit" class="btn-primary" style="width:100%; font-size:1rem; padding:12px;" type="button">
+        🔓 Unlock Scanner
+      </button>
+    </div>
+  </div>
+
+  <!-- TOP NAVIGATION BAR -->
+  <header class="top-bar">
+    <nav class="nav-tabs">
+      <button class="nav-tab active" data-view="viewScanner" type="button">📷 Scan</button>
+      <button class="nav-tab" data-view="viewSearch" type="button">🔍 Search</button>
+      <button id="tabQrGenerator" class="nav-tab" data-view="viewQr" type="button">🏷️ QR Tags</button>
+    </nav>
+    <div class="status-cluster">
+      <button id="userBadgeBtn" class="user-pill" type="button" title="Tap to switch user / PIN">👤 Volunteer</button>
+      <div id="syncBadge" class="sync-pill" title="Tap to sync now">
+        <span id="syncText">Synced</span>
+      </div>
+      <button id="btnSettings" class="icon-btn" type="button">⚙️</button>
+    </div>
+  </header>
+
+  <!-- VIEW 1: HIGH-SPEED SCANNER -->
+  <div id="viewScanner" class="view-panel active">
+    <div class="sub-bar">
+      <div class="pill-group">
+        <button id="btnModeIn" class="pill-btn active-in" type="button">📥 IN</button>
+        <button id="btnModeOut" class="pill-btn" type="button">📤 OUT</button>
+      </div>
+      <div class="pill-group" id="ensembleFilterGroup">
+        <button class="pill-btn active-ens" data-ens="ALL" type="button">All</button>
+        <button class="pill-btn" data-ens="Band" type="button">Band</button>
+        <button class="pill-btn" data-ens="Orchestra" type="button">Orch</button>
+      </div>
+    </div>
+
+    <main class="workspace">
+      <section id="studentCard" class="student-card">
+        <div class="line-display-row">
+          <span class="line-label">Line # / ID</span>
+          <span id="lineDisplay" class="line-number-value">---</span>
+        </div>
+
+        <div id="studentDetailsBox">
+          <div id="studentName" class="student-name">Type Line # or Scan ID</div>
+          <div id="studentMeta" class="student-meta">Camera scans Student IDs & Cases</div>
+        </div>
+
+        <div id="candidateList" class="candidate-list" style="display:none;"></div>
+
+        <div class="expected-case-box">
+          <div class="expected-top-row">
+            <div>
+              <div class="expected-label">Assigned Instrument</div>
+              <div id="expectedCase" class="expected-id">—</div>
+            </div>
+          </div>
+          <!-- Action buttons for Linking School ID or Manual Override when QR is damaged -->
+          <div id="studentActionButtons" class="card-action-row" style="display:none;">
+            <button id="btnManualCase" class="mini-action-btn warn-accent" type="button">⌨️ Manual / Bad QR</button>
+            <button id="btnLinkSchoolId" class="mini-action-btn" type="button">🔗 Link ID</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="cameraCard" class="camera-card">
+        <div id="reader"></div>
+        <div id="cameraStatusBadge" class="camera-status-badge">Ready: Scan ID or Type Line #</div>
+      </section>
+
+      <div id="resultBanner" class="result-banner">
+        <div id="resultIcon" style="font-size:2.2rem;">✓</div>
+        <div id="resultTitle" class="result-title">DIRECT MATCH</div>
+        <div id="resultSubtitle" class="result-subtitle">Logged</div>
+        <div class="banner-actions">
+          <button id="btnAddNote" class="banner-btn" type="button">✎ Add Note</button>
+          <button id="btnNextStudent" class="banner-btn" type="button">Next ➔</button>
+        </div>
+      </div>
+    </main>
+
+    <section class="keypad-section">
+      <div class="keypad-grid" id="keypadGrid">
+        <button class="key-btn" data-key="1" type="button">1</button>
+        <button class="key-btn" data-key="2" type="button">2</button>
+        <button class="key-btn" data-key="3" type="button">3</button>
+        <button class="key-btn" data-key="4" type="button">4</button>
+        <button class="key-btn" data-key="5" type="button">5</button>
+        <button class="key-btn" data-key="6" type="button">6</button>
+        <button class="key-btn" data-key="7" type="button">7</button>
+        <button class="key-btn" data-key="8" type="button">8</button>
+        <button class="key-btn" data-key="9" type="button">9</button>
+        <button class="key-btn key-clear" data-key="CLR" type="button">CLR</button>
+        <button class="key-btn" data-key="0" type="button">0</button>
+        <button class="key-btn key-back" data-key="BACK" type="button">⌫</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- VIEW 2: LIVE STATUS & HISTORY SEARCH -->
+  <div id="viewSearch" class="view-panel">
+    <div class="scroll-view">
+      <input id="searchInput" class="search-input" type="search" placeholder='Search e.g. "Trumpet 1", "Viola", "Joe", or "Needs QR"...'>
+      <div id="searchResultsContainer" style="display:flex; flex-direction:column; gap:8px;"></div>
+    </div>
+  </div>
+
+  <!-- VIEW 3: AVERY 60506 QR CODE & SCHOOL TAG GENERATOR -->
+  <div id="viewQr" class="view-panel">
+    <div class="scroll-view">
+      <div class="qr-controls">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <strong style="font-size:0.95rem;">Avery 60506 (2" × 2" — 12 per sheet) Tag Generator</strong>
+          <label style="font-size:0.75rem; color:var(--text-muted); display:flex; align-items:center; gap:5px; cursor:pointer;">
+            <input id="chkShowCutLines" type="checkbox"> Print Alignment Borders
+          </label>
+        </div>
+
+        <div class="form-row">
+          <div>
+            <label class="field-label">Tag Batch / Mode</label>
+            <select id="qrTypeSelect" class="form-select">
+              <option value="BATCH_INST">All Roster Instruments (Batch)</option>
+              <option value="FLAGGED_BAD_QR">🔧 Flagged "Bad QR" Cases Only (Auto-Queue)</option>
+              <option value="SINGLE_INST">Single Replacement Instrument Tag</option>
+              <option value="BATCH_STU">All Roster Students (Batch)</option>
+              <option value="SINGLE_STU">Single Student Badge QR</option>
+              <option value="RETURN_ONLY">Companion "Property Of / Return" Sticker (12-up)</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">Ensemble Filter</label>
+            <select id="qrEnsembleSelect" class="form-select">
+              <option value="ALL">Band & Orchestra</option>
+              <option value="Band">Band Only</option>
+              <option value="Orchestra">Orchestra Only</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div>
+            <label class="field-label">School Header Line</label>
+            <input id="qrSchoolHeaderInput" class="form-input" type="text" placeholder="e.g. LINCOLN MS MUSIC">
+          </div>
+          <div>
+            <label class="field-label">Return Instructions / Phone</label>
+            <input id="qrReturnInfoInput" class="form-input" type="text" placeholder="e.g. If found: Band Room / 555-0199">
+          </div>
+        </div>
+
+        <div class="form-row" style="align-items:end;">
+          <div>
+            <label class="field-label">Optional School Logo (PNG/JPG/SVG)</label>
+            <input id="qrLogoFileInput" class="form-input" type="file" accept="image/*" style="padding:5px;">
+          </div>
+          <div style="display:flex; gap:6px; justify-content:flex-end;">
+            <button id="btnClearLogo" class="btn-secondary" type="button" style="display:none;">✖ Clear Logo</button>
+            <button id="btnPrintQr" class="btn-primary" type="button">🖨️ Print Avery 60506 Sheet</button>
+          </div>
+        </div>
+
+        <div id="qrSingleInputs" class="form-row" style="display:none;">
+          <input id="qrInputPrimary" class="form-input" type="text" placeholder="Instrument (e.g. Trumpet)">
+          <input id="qrInputSecondary" class="form-input" type="text" placeholder="Case # (e.g. 7)">
+          <input id="qrStartSlotInput" class="form-input" type="number" min="1" max="12" value="1" placeholder="Start on Label # (1-12)" title="Skip already-used stickers on a partial Avery 60506 sheet!">
+        </div>
+      </div>
+
+      <div id="qrPreviewGrid" class="avery-sheet-container hide-cut-lines"></div>
+    </div>
+  </div>
+
+  <!-- ====================================================================
+       MANUAL INSTRUMENT OVERRIDE / DAMAGED QR MODAL
+       ==================================================================== -->
+  <div id="manualCaseModal" class="modal-backdrop">
+    <div class="modal-box">
+      <div style="font-weight:800; font-size:1.05rem; margin-bottom:10px;">⌨️ Manual Entry (Damaged / Missing QR)</div>
+
+      <!-- 1-Tap Fast Confirm for Assigned Instrument -->
+      <button id="btnQuickConfirmAssigned" class="btn-success-large" type="button">
+        ✓ Log Assigned: Trumpet #1 (Flag Bad QR)
+      </button>
+
+      <div style="font-size:0.76rem; color:var(--text-muted); text-transform:uppercase; font-weight:700; margin-bottom:8px; text-align:center;">
+        — OR Enter a Different Case —
+      </div>
+
+      <div class="form-row" style="margin-bottom:10px;">
+        <div>
+          <label class="field-label" for="manualSectionInput">Instrument Section</label>
+          <input id="manualSectionInput" class="form-input" type="text" list="sectionSuggestions" placeholder="e.g. Trumpet">
+          <datalist id="sectionSuggestions"></datalist>
+        </div>
+        <div>
+          <label class="field-label" for="manualCaseNumInput">Case #</label>
+          <input id="manualCaseNumInput" class="form-input" type="text" inputmode="numeric" placeholder="e.g. 4">
+        </div>
+      </div>
+
+      <label style="display:flex; align-items:center; gap:8px; font-size:0.84rem; margin-bottom:14px; cursor:pointer;">
+        <input id="chkFlagBadQr" type="checkbox" checked style="width:18px; height:18px;">
+        <span>Flag this case for a <strong>Replacement QR Tag</strong></span>
+      </label>
+
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button id="btnCancelManual" class="btn-secondary" type="button">Cancel</button>
+        <button id="btnSubmitManual" class="btn-primary" type="button">Log Manual Case</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- VOLUNTEER NOTE MODAL -->
+  <div id="noteModal" class="modal-backdrop">
+    <div class="modal-box">
+      <div style="font-weight:800; margin-bottom:10px;">Attach Volunteer Note</div>
+      <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+        <button class="btn-secondary note-chip" data-note="Director Approved Loaner" type="button">Loaner</button>
+        <button class="btn-secondary note-chip" data-note="Grabbed Wrong Case #" type="button">Wrong Case</button>
+        <button class="btn-secondary note-chip" data-note="[NEEDS QR TAG] Damaged / Missing QR" type="button">Needs New QR</button>
+      </div>
+      <input id="noteInput" class="form-input" type="text" placeholder="Custom note..." style="margin-bottom:12px;">
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button id="btnCancelNote" class="btn-secondary" type="button">Cancel</button>
+        <button id="btnSaveNote" class="btn-primary" type="button">Save Note</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DIRECTOR SETTINGS MODAL -->
+  <div id="settingsModal" class="modal-backdrop">
+    <div class="modal-box">
+      <div style="font-weight:800; margin-bottom:8px;">System Configuration</div>
+      <label class="field-label">Google Apps Script Web App URL:</label>
+      <input id="gasUrlInput" class="form-input" type="url" placeholder="https://script.google.com/macros/s/.../exec" style="margin-bottom:12px;">
+      
+      <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:14px; line-height:1.5;">
+        <div>Logged In As: <strong id="settingsUserText" style="color:#38bdf8;">—</strong></div>
+        <div>Cached Roster: <strong id="rosterCountText" style="color:#fff;">0</strong> students</div>
+        <div>Cached Scan History: <strong id="historyCountText" style="color:#fff;">0</strong> logs</div>
+        <div>Offline Sync Queue: <strong id="queueCountText" style="color:#fff;">0</strong> pending</div>
+      </div>
+
+      <div style="display:flex; justify-content:space-between;">
+        <button id="btnReloadRoster" class="btn-secondary" type="button">🔄 Sync Now</button>
+        <div style="display:flex; gap:6px;">
+          <button id="btnCloseSettings" class="btn-secondary" type="button">Close</button>
+          <button id="btnSaveSettings" class="btn-primary" type="button">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="./db.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
