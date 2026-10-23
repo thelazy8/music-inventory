@@ -1,4 +1,4 @@
-// app.js - Complete Controller (v14: Tappable Full History & Practice Habit Timeline Modal)
+// app.js - Complete Controller (v15: Search Tab QR/ID Scanner + Auto-History Popup + District Student_ID Support)
 const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbzSdFeiLX9wMGEkTAtviNUKABb_haLkxnAxlLJGaLYXbLO0T9PvhPOSM2pcNrjNHwkqqw/exec';
 
 const STORAGE_KEYS = {
@@ -39,6 +39,7 @@ const AppState = {
   matchedCandidates: [],
   activeStudent: null,
   awaitingIdLink: false,
+  searchScanActive: false,
   pendingRepairInstrument: null,
   pendingInvoiceBase64: '',
   pendingInvoiceMime: '',
@@ -255,8 +256,37 @@ function injectWideCameraAndModals() {
     .timeline-item.tl-out { border-left-color: #f97316; }
     .timeline-item.tl-in { border-left-color: #22c55e; }
     .timeline-item.tl-repair { border-left-color: #a855f7; }
+    .search-bar-row { display: flex; gap: 8px; align-items: stretch; }
+    .btn-search-scan { background: #0284c7; color: #fff; border: 2px solid #38bdf8; border-radius: 10px; padding: 0 14px; font-weight: 800; font-size: 0.86rem; cursor: pointer; white-space: nowrap; display: flex; align-items: center; gap: 5px; }
+    .search-scan-banner { background: #0284c7; color: #fff; padding: 10px 12px; border-radius: 10px; font-weight: 800; font-size: 0.88rem; display: none; justify-content: space-between; align-items: center; margin: 0 10px 6px 10px; }
+    .search-scan-banner.active { display: flex; }
   `;
   document.head.appendChild(style);
+
+  // Wrap searchInput in a row with a "📷 Scan QR / ID" button
+  if (UI.searchInput && UI.searchInput.parentElement) {
+    const searchRow = document.createElement('div');
+    searchRow.className = 'search-bar-row';
+    UI.searchInput.parentElement.insertBefore(searchRow, UI.searchInput);
+    searchRow.appendChild(UI.searchInput);
+
+    const btnScanSearch = document.createElement('button');
+    btnScanSearch.id = 'btnScanInSearch';
+    btnScanSearch.type = 'button';
+    btnScanSearch.className = 'btn-search-scan';
+    btnScanSearch.innerHTML = '📷 Scan QR / ID';
+    searchRow.appendChild(btnScanSearch);
+  }
+
+  // Add Search-Scan mode banner to viewScanner so when triggered from Search tab, it guides the user clearly
+  const viewScanner = document.getElementById('viewScanner');
+  if (viewScanner) {
+    const banner = document.createElement('div');
+    banner.id = 'searchScanBanner';
+    banner.className = 'search-scan-banner';
+    banner.innerHTML = `<span>🔎 Scan Instrument QR or Student ID for History...</span><button id="btnCancelSearchScan" type="button" class="btn-secondary" style="padding:4px 10px; font-size:0.78rem; background:#0f172a;">✖ Cancel</button>`;
+    viewScanner.insertBefore(banner, viewScanner.firstChild);
+  }
 
   const wrapper = document.createElement('div');
   wrapper.innerHTML = `
@@ -268,9 +298,9 @@ function injectWideCameraAndModals() {
         </div>
         <div id="txErrorBox" class="tx-error-banner" style="display:none;"></div>
         <div id="txStudentPromptBox" style="margin-bottom:12px;">
-          <label class="field-label">Checking Out To Student (Enter Line # or Scan Student ID):</label>
+          <label class="field-label">Checking Out To Student (Enter Line # / Student ID, or Scan Badge):</label>
           <div style="display:flex; gap:6px; margin-bottom:6px;">
-            <input id="txLineInput" class="form-input" type="number" inputmode="numeric" placeholder="Line #" style="width:95px; font-size:1.1rem; font-weight:800;">
+            <input id="txLineInput" class="form-input" type="number" inputmode="numeric" placeholder="Line # or ID" style="width:125px; font-size:1rem; font-weight:800;">
             <select id="txEnsembleSelect" class="form-select" style="flex:1;">
               <option value="Band">Band</option>
               <option value="Orchestra">Orchestra</option>
@@ -453,7 +483,7 @@ function patchTrackerDBForInstrumentColumn() {
 document.addEventListener('DOMContentLoaded', async () => {
   injectWideCameraAndModals();
   patchTrackerDBForInstrumentColumn();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js?v=14').catch(() => {});
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js?v=15').catch(() => {});
   localStorage.removeItem('instrument_tracker_user_pin');
   localStorage.removeItem('instrument_tracker_user_role');
 
@@ -666,7 +696,7 @@ function handleKeypad(key) {
     UI.resultBanner.classList.remove('visible');
     AppState.postTransactionReset = false;
     AppState.currentInput = AppState.currentInput.slice(0, -1);
-  } else if (AppState.currentInput.length < 4) {
+  } else if (AppState.currentInput.length < 10) {
     if (AppState.currentInput === '' && key === '0') return;
     AppState.currentInput += key;
   }
@@ -683,7 +713,7 @@ function lookupByLineNumber(inputStr) {
   if (!inputStr) {
     UI.lineDisplay.textContent = '---';
     UI.studentName.textContent = 'Scan Case QR or Type Line #';
-    UI.studentMeta.textContent = 'Scan instrument first OR enter student Line #';
+    UI.studentMeta.textContent = 'Scan instrument first OR enter Line # / ID';
     UI.expectedCase.textContent = '—';
     UI.candidateList.style.display = 'none';
     UI.studentActionButtons.style.display = 'none';
@@ -696,9 +726,12 @@ function lookupByLineNumber(inputStr) {
   }
 
   const lineNum = parseInt(inputStr, 10);
-  UI.lineDisplay.textContent = lineNum;
+  UI.lineDisplay.textContent = inputStr;
 
+  // Match by Line_Number OR district Student_ID
   const matches = AppState.rosterList.filter((s) => {
+    const idMatch = s.Student_ID && String(s.Student_ID).trim() === String(inputStr).trim();
+    if (idMatch) return true;
     const lineMatch = Number(s.Line_Number) === lineNum;
     if (lineNum >= 900 || String(s.Ensemble).toUpperCase() === 'REPAIR') return lineMatch;
     return lineMatch && (AppState.ensembleFilter === 'ALL' || s.Ensemble.toUpperCase() === AppState.ensembleFilter.toUpperCase());
@@ -710,7 +743,7 @@ function lookupByLineNumber(inputStr) {
   else {
     AppState.activeStudent = null;
     UI.candidateList.style.display = 'none';
-    UI.studentName.textContent = `⚠️ Line #${lineNum} Not on Roster`;
+    UI.studentName.textContent = `⚠️ #${inputStr} Not on Roster`;
     UI.studentMeta.textContent = 'Tap button to fix typo or add student';
     UI.expectedCase.textContent = 'UNLISTED';
     UI.studentActionButtons.style.display = 'flex';
@@ -719,7 +752,7 @@ function lookupByLineNumber(inputStr) {
     if (addUnlistedBtn) addUnlistedBtn.style.display = 'inline-block';
     UI.studentCard.classList.remove('ready-to-scan');
     UI.cameraCard.classList.remove('active-target');
-    UI.cameraStatusBadge.textContent = `⚠️ Line #${lineNum} Unlisted — Tap Add/Fix Above`;
+    UI.cameraStatusBadge.textContent = `⚠️ #${inputStr} Unlisted — Tap Add/Fix Above`;
   }
 }
 
@@ -779,7 +812,7 @@ function selectActiveStudent(student, showCandidateSwitcher) {
   UI.studentName.textContent = student.Student_Name;
   UI.studentMeta.textContent = isRepair
     ? `Repair (${AppState.actionMode === 'CHECK_OUT' ? 'OUT to Shop' : 'IN from Shop'})`
-    : `${student.Ensemble} #${student.Line_Number}${student.Student_ID ? ' • ID✓' : ''}`;
+    : `${student.Ensemble} #${student.Line_Number}${student.Student_ID ? ' • ID:' + student.Student_ID : ''}`;
   UI.expectedCase.textContent = isRepair ? 'Any Case' : formatAssignedPairsText(student);
 
   UI.studentActionButtons.style.display = 'flex';
@@ -835,6 +868,29 @@ function isAnyModalBlockingScan() {
   return false;
 }
 
+/**
+ * Activates Search Scan Mode: switches to the live camera viewfinder to scan an Instrument QR
+ * or Student ID QR, then returns to the Search tab and pops open the Full History Modal!
+ */
+function startSearchScanMode() {
+  AppState.searchScanActive = true;
+  const banner = document.getElementById('searchScanBanner');
+  if (banner) banner.classList.add('active');
+  UI.navTabs.forEach((t) => t.classList.toggle('active', t.dataset.view === 'viewScanner'));
+  UI.views.forEach((v) => v.classList.toggle('active', v.id === 'viewScanner'));
+  UI.cameraStatusBadge.textContent = '🔎 SEARCH SCAN: Point at Instrument QR or Student ID';
+}
+
+function stopSearchScanMode(switchBackToSearch = true) {
+  AppState.searchScanActive = false;
+  const banner = document.getElementById('searchScanBanner');
+  if (banner) banner.classList.remove('active');
+  if (switchBackToSearch) {
+    UI.navTabs.forEach((t) => t.classList.toggle('active', t.dataset.view === 'viewSearch'));
+    UI.views.forEach((v) => v.classList.toggle('active', v.id === 'viewSearch'));
+  }
+}
+
 async function onCodeScanned(rawText) {
   if (isAnyModalBlockingScan()) return;
   const now = Date.now();
@@ -842,6 +898,52 @@ async function onCodeScanned(rawText) {
   const code = String(rawText || '').trim();
   if (!code) return;
   unlockAudio();
+
+  // CASE 0: Search Scan Mode Active -> Open Search & Full History for scanned Instrument or Student ID!
+  if (AppState.searchScanActive) {
+    AppState.lastScanTime = now;
+    if (code.toUpperCase().startsWith('INST|')) {
+      const parts = code.split('|');
+      const sec = (parts[1] || '').trim();
+      const num = (parts[2] || '').trim();
+      playTone('MATCH');
+      stopSearchScanMode(true);
+      UI.searchInput.value = `${sec} ${num}`;
+      runStatusSearch(UI.searchInput.value);
+      openFullHistoryModal('INST', sec, num);
+      return;
+    }
+    if (code.toUpperCase().startsWith('STU|')) {
+      const parts = code.split('|');
+      const ens = (parts[1] || '').trim().toUpperCase();
+      const lineNum = parseInt(parts[2], 10);
+      const stu = AppState.rosterList.find((s) => s.Ensemble.toUpperCase() === ens && Number(s.Line_Number) === lineNum);
+      if (stu) {
+        playTone('MATCH');
+        stopSearchScanMode(true);
+        UI.searchInput.value = stu.Student_Name;
+        runStatusSearch(UI.searchInput.value);
+        openFullHistoryModal('STU', stu.composite_id, '');
+      }
+      return;
+    }
+    // District Student ID QR code
+    const stuById = AppState.rosterList.find((s) => s.Student_ID && String(s.Student_ID).trim().toUpperCase() === code.toUpperCase());
+    if (stuById) {
+      playTone('MATCH');
+      stopSearchScanMode(true);
+      UI.searchInput.value = stuById.Student_Name;
+      runStatusSearch(UI.searchInput.value);
+      openFullHistoryModal('STU', stuById.composite_id, '');
+      return;
+    }
+    playTone('WARNING');
+    stopSearchScanMode(true);
+    UI.searchInput.value = code;
+    runStatusSearch(code);
+    alert(`Scanned ID "${code}" is not linked to a student or instrument on the Roster yet.`);
+    return;
+  }
 
   const txModalOpen = document.getElementById('txModal').classList.contains('open');
   if (txModalOpen && AppState.pendingTx && AppState.pendingTx.mode === 'CHECK_OUT') {
@@ -859,6 +961,20 @@ async function onCodeScanned(rawText) {
       AppState.lastScanTime = now;
       playTone('MATCH');
       setTxModalSelectedStudent(stuByBadge);
+      return;
+    }
+    // If a student is already selected in txModal and has no Student_ID yet, link this scanned district ID to them!
+    if (AppState.pendingTx.student && !AppState.pendingTx.student.Student_ID && !code.toUpperCase().startsWith('INST|')) {
+      AppState.lastScanTime = now;
+      const stu = AppState.pendingTx.student;
+      stu.Student_ID = code;
+      playTone('MATCH');
+      await window.TrackerDB.enqueueItem({
+        Request_Type: 'LINK_STUDENT_ID', Auth_PIN: AppState.userPin,
+        Ensemble: stu.Ensemble, Line_Number: stu.Line_Number, Student_ID: code
+      });
+      setTxModalSelectedStudent(stu);
+      flushOutboundQueue();
     }
     return;
   }
@@ -1041,7 +1157,7 @@ function setTxModalSelectedStudent(student) {
     assignBox.style.display = 'none';
     btnConfirm.disabled = true;
     btnConfirm.style.opacity = '0.5';
-    btnConfirm.textContent = 'Enter Line # or Scan Student ID Above';
+    btnConfirm.textContent = 'Enter Line # / ID or Scan Student Badge';
     return;
   }
 
@@ -1049,7 +1165,7 @@ function setTxModalSelectedStudent(student) {
   if (student.Ensemble === 'Band' || student.Ensemble === 'Orchestra') txEnsembleSelect.value = student.Ensemble;
 
   card.style.display = 'block';
-  card.innerHTML = `<strong>👤 ${escapeHtml(student.Student_Name)}</strong> (${escapeHtml(student.Ensemble)} #${student.Line_Number})<br><span style="font-size:0.76rem; color:#94a3b8;">Roster Assignment: ${escapeHtml(formatAssignedPairsText(student))}</span>`;
+  card.innerHTML = `<strong>👤 ${escapeHtml(student.Student_Name)}</strong> (${escapeHtml(student.Ensemble)} #${student.Line_Number}${student.Student_ID ? ' • ID:' + escapeHtml(student.Student_ID) : ''})<br><span style="font-size:0.76rem; color:#94a3b8;">Roster Assignment: ${escapeHtml(formatAssignedPairsText(student))}</span>`;
 
   const compat = checkEnsembleCompatibility(student, section, caseId);
   if (!compat.allowed) {
@@ -1094,7 +1210,9 @@ function handleTxModalLineLookup() {
     return;
   }
 
-  const found = AppState.rosterList.find(
+  // Match either district Student_ID or Line_Number + Ensemble
+  const byDistrictId = AppState.rosterList.find((s) => s.Student_ID && String(s.Student_ID).trim() === lineStr);
+  const found = byDistrictId || AppState.rosterList.find(
     (s) => Number(s.Line_Number) === lineNum && (s.Ensemble.toUpperCase() === ensVal.toUpperCase() || s.Ensemble.toUpperCase() === 'BOTH' || s.Ensemble.toUpperCase() === 'ALL')
   );
   if (found) setTxModalSelectedStudent(found);
@@ -1102,7 +1220,7 @@ function handleTxModalLineLookup() {
     setTxModalSelectedStudent(null);
     const card = document.getElementById('txSelectedStudentCard');
     card.style.display = 'block';
-    card.innerHTML = `<span style="color:#fcd34d; font-weight:800;">⚠️ Line #${lineNum} (${ensVal}) is not on the Roster.</span>
+    card.innerHTML = `<span style="color:#fcd34d; font-weight:800;">⚠️ #${lineNum} (${ensVal}) is not on the Roster.</span>
       <div style="margin-top:6px;"><button id="btnTxAddUnlisted" type="button" class="btn-primary" style="font-size:0.76rem; padding:6px 10px;">➕ Add New Student to Line #${lineNum}</button></div>`;
     document.getElementById('btnTxAddUnlisted').addEventListener('click', () => {
       openUnlistedLineModal(lineNum, (newStu) => setTxModalSelectedStudent(newStu));
@@ -1381,7 +1499,7 @@ function runStatusSearch(rawQuery) {
   const q = String(rawQuery || '').trim().toLowerCase();
   if (!q) {
     UI.searchResultsContainer.innerHTML = `<div style="color:var(--text-muted); text-align:center; padding:20px;">
-      Type an instrument (<strong>"Trumpet 1"</strong>), student name, <strong>"checked out"</strong>, <strong>"checked out today"</strong>, or a date (<strong>"checked out 10/23"</strong>).<br><br>
+      Type an instrument (<strong>"Trumpet 1"</strong>), student name/ID, <strong>"checked out"</strong>, <strong>"checked out today"</strong>, or tap <strong>📷 Scan QR / ID</strong> above!<br><br>
       <span style="color:#38bdf8;">💡 Tap any search result card to view its full check-out/in history!</span>
     </div>`;
     return;
@@ -1447,8 +1565,8 @@ function runStatusSearch(rawQuery) {
       else if (statusFilter === 'IN') includeStu = !currentlyOut && stuLogs.length > 0;
     } else {
       const searchQ = textRemainder || q;
-      const exactLine = /^\d+$/.test(searchQ) && Number(stu.Line_Number) === Number(searchQ);
-      const hay = `${stu.Student_Name} ${stu.Ensemble} ${formatAssignedPairsText(stu)} ${stu.Line_Number}`.toLowerCase();
+      const exactLine = /^\d+$/.test(searchQ) && (Number(stu.Line_Number) === Number(searchQ) || String(stu.Student_ID || '').trim() === searchQ);
+      const hay = `${stu.Student_Name} ${stu.Ensemble} ${formatAssignedPairsText(stu)} ${stu.Line_Number} ${stu.Student_ID || ''}`.toLowerCase();
       includeStu = (exactLine || hay.includes(searchQ)) && (!statusFilter || (statusFilter === 'OUT' ? currentlyOut : !currentlyOut));
     }
     if (!includeStu) continue;
@@ -1468,7 +1586,7 @@ function runStatusSearch(rawQuery) {
     cardsHtml.push(`
       <div class="result-card tappable-card" data-hist-type="STU" data-comp="${escapeHtml(stu.composite_id)}">
         <div class="result-card-header"><strong style="font-size:1.05rem;">👤 ${escapeHtml(stu.Student_Name)} (${escapeHtml(stu.Ensemble)} #${stu.Line_Number})</strong><span class="${currentlyOut ? 'badge-out' : 'badge-in'}">${currentlyOut ? 'HAS INSTRUMENT OUT' : 'ALL CHECKED IN'}</span></div>
-        <div style="font-size:0.84rem; color:#cbd5e1; line-height:1.4;">Assigned: <strong>${escapeHtml(formatAssignedPairsText(stu))}</strong><br>${historySummary}</div>
+        <div style="font-size:0.84rem; color:#cbd5e1; line-height:1.4;">Assigned: <strong>${escapeHtml(formatAssignedPairsText(stu))}</strong>${stu.Student_ID ? ' • ID: ' + escapeHtml(stu.Student_ID) : ''}<br>${historySummary}</div>
         <div class="tap-history-hint"><span>📜 Tap to view practice & check-out/in history</span><span>${stuLogs.length} logs ➔</span></div>
       </div>
     `);
@@ -1477,9 +1595,6 @@ function runStatusSearch(rawQuery) {
   UI.searchResultsContainer.innerHTML = cardsHtml.length > 0 ? cardsHtml.join('') : `<div style="color:var(--text-muted); text-align:center; padding:20px;">No matching students or instruments found.</div>`;
 }
 
-/**
- * Opens the Full Active History & Practice Habit Timeline Modal when a search result card is tapped.
- */
 function openFullHistoryModal(type, secOrComp, caseId) {
   const modal = document.getElementById('historyModal');
   const titleEl = document.getElementById('histModalTitle');
@@ -1496,7 +1611,7 @@ function openFullHistoryModal(type, secOrComp, caseId) {
     stuRef = AppState.rosterList.find((s) => s.composite_id === secOrComp);
     if (!stuRef) return;
     titleEl.textContent = `👤 ${stuRef.Student_Name}`;
-    subEl.textContent = `${stuRef.Ensemble} • Line #${stuRef.Line_Number} • Assigned: ${formatAssignedPairsText(stuRef)}`;
+    subEl.textContent = `${stuRef.Ensemble} • Line #${stuRef.Line_Number}${stuRef.Student_ID ? ' • ID: ' + stuRef.Student_ID : ''} • Assigned: ${formatAssignedPairsText(stuRef)}`;
     matchedLogs = AppState.scanHistory.filter(
       (l) => Number(l.Line_Number) === Number(stuRef.Line_Number) && String(l.Student_Name || '').toUpperCase() === stuRef.Student_Name.toUpperCase()
     );
@@ -1512,13 +1627,9 @@ function openFullHistoryModal(type, secOrComp, caseId) {
     );
   }
 
-  const outCount = matchedLogs.filter((l) => l.Action === 'CHECK_OUT').length;
-  const inCount = matchedLogs.filter((l) => l.Action === 'CHECK_IN').length;
-  const otherCount = matchedLogs.filter((l) => l.Status_Flag && l.Status_Flag !== 'DIRECT_MATCH').length;
-
-  statOutEl.textContent = outCount;
-  statInEl.textContent = inCount;
-  statOtherEl.textContent = otherCount;
+  statOutEl.textContent = matchedLogs.filter((l) => l.Action === 'CHECK_OUT').length;
+  statInEl.textContent = matchedLogs.filter((l) => l.Action === 'CHECK_IN').length;
+  statOtherEl.textContent = matchedLogs.filter((l) => l.Status_Flag && l.Status_Flag !== 'DIRECT_MATCH').length;
 
   if (matchedLogs.length === 0) {
     listEl.innerHTML = `<div style="color:var(--text-muted); text-align:center; padding:20px;">No check-out or check-in history recorded yet this term.</div>`;
@@ -1526,7 +1637,6 @@ function openFullHistoryModal(type, secOrComp, caseId) {
     return;
   }
 
-  // Render newest-first timeline
   const reversed = [...matchedLogs].reverse();
   listEl.innerHTML = reversed.map((log) => {
     const isRepair = String(log.Status_Flag || '').includes('REPAIR') || String(log.Ensemble || '').toUpperCase() === 'REPAIR';
@@ -1543,7 +1653,6 @@ function openFullHistoryModal(type, secOrComp, caseId) {
       ? `Instrument: <strong>${escapeHtml(instName)} #${escapeHtml(log.Case_ID)}</strong> (${escapeHtml(log.Ensemble || '')})`
       : `Student/Shop: <strong>${escapeHtml(log.Student_Name)}</strong> (${escapeHtml(log.Ensemble || '')} #${log.Line_Number})`;
 
-    // Check if there is a matching Repair record with a Google Drive Invoice Link
     let invoiceLinkHtml = '';
     if (isRepair) {
       const repMatch = AppState.repairsHistory.find(
@@ -1600,7 +1709,7 @@ function filterByCustomKeywords(items, rawQuery, isStudentMode) {
         else isMatch = `${itemSec} ${item.Ensemble} ${item.Brand || ''}`.toLowerCase().includes(textPart) && String(item.Case_ID).toLowerCase() === numPart;
       } else {
         const hay = isStudentMode
-          ? `${item.Student_Name} ${item.Ensemble} ${itemSec} ${item.Line_Number}`.toLowerCase()
+          ? `${item.Student_Name} ${item.Ensemble} ${itemSec} ${item.Line_Number} ${item.Student_ID || ''}`.toLowerCase()
           : `${itemSec} ${item.Case_ID} ${item.Ensemble} ${item.Assigned_Student || ''} ${item.Brand || ''} ${item.Model || ''} ${item.Serial || ''}`.toLowerCase();
         isMatch = hay.includes(token);
       }
@@ -1875,6 +1984,7 @@ function bindEvents() {
         alert('🔒 The QR Tag Generator requires the Director Admin PIN. Tap your name badge in the top bar to switch to the Admin PIN.');
         return;
       }
+      stopSearchScanMode(false);
       UI.navTabs.forEach((t) => t.classList.remove('active'));
       UI.views.forEach((v) => v.classList.remove('active'));
       tab.classList.add('active');
@@ -1883,6 +1993,12 @@ function bindEvents() {
       else if (tab.dataset.view === 'viewQr') renderLabelSheets();
     });
   });
+
+  // Search Tab "📷 Scan QR / ID" Button & Cancel Banner
+  const btnScanInSearch = document.getElementById('btnScanInSearch');
+  if (btnScanInSearch) btnScanInSearch.addEventListener('click', startSearchScanMode);
+  const btnCancelSearchScan = document.getElementById('btnCancelSearchScan');
+  if (btnCancelSearchScan) btnCancelSearchScan.addEventListener('click', () => stopSearchScanMode(true));
 
   UI.btnModeIn.addEventListener('click', () => applyModeUI('CHECK_IN'));
   UI.btnModeOut.addEventListener('click', () => applyModeUI('CHECK_OUT'));
@@ -1925,7 +2041,6 @@ function bindEvents() {
   });
   document.getElementById('btnSaveNewStudent').addEventListener('click', handleSaveNewStudentFromModal);
 
-  // Full History Modal Delegation on Search Cards
   UI.searchResultsContainer.addEventListener('click', (e) => {
     const card = e.target.closest('.tappable-card');
     if (!card) return;
