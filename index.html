@@ -10,7 +10,7 @@
   <link rel="manifest" href="./manifest.json">
   <script>
     if ('caches' in window) {
-      caches.keys().then((keys) => keys.forEach((k) => { if (k !== 'bandscan-pwa-v9') caches.delete(k); }));
+      caches.keys().then((keys) => keys.forEach((k) => { if (k !== 'bandscan-pwa-v10') caches.delete(k); }));
     }
   </script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -116,14 +116,14 @@
     .avery-sheet-container.hide-cut-lines .avery-label-cell { border-color: transparent; }
     .tag-header-band { width: 100%; display: flex; align-items: center; justify-content: center; gap: 4px; border-bottom: 1.5px solid #000; padding-bottom: 2px; }
     .tag-logo-img { max-height: 0.22in; max-width: 0.36in; object-fit: contain; }
-    .tag-school-block { display: flex; flex-direction: column; line-height: 1.1; width: 100%; }
-    .tag-school-name { font-size: 7.2pt; font-weight: 900; color: #000; text-transform: uppercase; white-space: normal; word-break: break-word; }
-    .tag-return-text { font-size: 5.6pt; font-weight: 700; color: #222; white-space: normal; word-break: break-word; }
+    .tag-school-block { display: flex; flex-direction: column; line-height: 1.15; width: 100%; }
+    /* white-space: pre-line strictly preserves manual line breaks (Alt+Enter) from Google Sheets! */
+    .tag-school-name { font-size: 7.2pt; font-weight: 900; color: #000; text-transform: uppercase; white-space: pre-line; word-break: break-word; }
+    .tag-return-text { font-size: 5.6pt; font-weight: 700; color: #222; white-space: pre-line; word-break: break-word; }
     .tag-qr-wrap { display: flex; align-items: center; justify-content: center; margin: 1px 0; }
-    .tag-footer-band { width: 100%; border-top: 1.5px solid #000; padding-top: 2px; line-height: 1.08; }
-    .tag-main-id { font-size: 11pt; font-weight: 900; color: #000; letter-spacing: 0.01em; white-space: normal; word-break: break-word; }
-    /* Brand, Model, Serial at the very bottom in small print matching return instructions */
-    .tag-sub-id { font-size: 5.6pt; font-weight: 700; color: #222; margin-top: 1px; white-space: normal; word-break: break-word; }
+    .tag-footer-band { width: 100%; border-top: 1.5px solid #000; padding-top: 2px; line-height: 1.1; }
+    .tag-main-id { font-size: 11pt; font-weight: 900; color: #000; letter-spacing: 0.01em; white-space: pre-line; word-break: break-word; }
+    .tag-sub-id { font-size: 5.6pt; font-weight: 700; color: #222; margin-top: 1px; white-space: pre-line; word-break: break-word; }
     .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.78); display: none; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
     .modal-backdrop.open { display: flex; }
     .modal-box { background: var(--bg-card); border: 1px solid #475569; border-radius: var(--border-radius); width: 100%; max-width: 410px; padding: 16px; max-height: 92dvh; overflow-y: auto; }
@@ -256,14 +256,18 @@
     </div>
   </div>
 
+  <!-- VIEW 3: QR GENERATOR (School Header, Return Info, and Logo pulled strictly from Master Sheet Settings tab) -->
   <div id="viewQr" class="view-panel">
     <div class="scroll-view">
       <div class="qr-controls">
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
           <strong style="font-size:0.95rem;">QR Label Sheet Generator</strong>
-          <label style="font-size:0.75rem; color:var(--text-muted); display:flex; align-items:center; gap:5px; cursor:pointer;">
-            <input id="chkShowCutLines" type="checkbox"> Print Alignment Borders
-          </label>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <label style="font-size:0.75rem; color:var(--text-muted); display:flex; align-items:center; gap:5px; cursor:pointer;">
+              <input id="chkShowCutLines" type="checkbox"> Alignment Borders
+            </label>
+            <button id="btnPrintQr" class="btn-primary" type="button">🖨️ Print Label Sheet</button>
+          </div>
         </div>
         <div class="form-row-3">
           <div>
@@ -315,7 +319,6 @@
           </div>
         </div>
 
-        <!-- Custom Group / Multi-Keyword Filter Box -->
         <div id="qrCustomFilterBox">
           <label class="field-label" for="qrCustomQueryInput">🎯 Custom Group / Keyword Filter (Comma-separated for mini batches, or leave blank for all)</label>
           <input id="qrCustomQueryInput" class="form-input" type="text" placeholder='e.g. violin 5, violin 6, trumpet 2, Joe Band, Yamaha...'>
@@ -348,26 +351,11 @@
           </div>
         </div>
 
-        <div class="form-row">
-          <div>
-            <label class="field-label">School Header Line</label>
-            <input id="qrSchoolHeaderInput" class="form-input" type="text" placeholder="e.g. LINCOLN MS MUSIC">
-          </div>
-          <div>
-            <label class="field-label">Return Instructions / Phone</label>
-            <input id="qrReturnInfoInput" class="form-input" type="text" placeholder="e.g. If found: Band Room / 555-0199">
-          </div>
-        </div>
-        <div class="form-row" style="align-items:end;">
-          <div>
-            <label class="field-label">Optional School Logo (PNG/JPG/SVG)</label>
-            <input id="qrLogoFileInput" class="form-input" type="file" accept="image/*" style="padding:5px;">
-          </div>
-          <div style="display:flex; gap:6px; justify-content:flex-end;">
-            <button id="btnClearLogo" class="btn-secondary" type="button" style="display:none;">✖ Clear Logo</button>
-            <button id="btnPrintQr" class="btn-primary" type="button">🖨️ Print Label Sheet</button>
-          </div>
-        </div>
+        <!-- Hidden compatibility inputs (values managed via Master Sheet Settings tab) -->
+        <input id="qrSchoolHeaderInput" type="hidden">
+        <input id="qrReturnInfoInput" type="hidden">
+        <input id="qrLogoFileInput" type="file" style="display:none;">
+        <button id="btnClearLogo" type="button" style="display:none;"></button>
       </div>
       <div id="qrPreviewGrid" class="avery-sheet-container hide-cut-lines"></div>
     </div>
@@ -477,8 +465,8 @@
     </div>
   </div>
 
-  <script src="./db.js?v=9"></script>
-  <script src="./app.js?v=9"></script>
+  <script src="./db.js?v=10"></script>
+  <script src="./app.js?v=10"></script>
 </body>
 </html>
 <!-- END OF INDEX.HTML -->
