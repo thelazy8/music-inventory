@@ -1,8 +1,9 @@
 /**
- * sw.js - Service Worker for Offline Asset Caching
+ * sw.js - Network-First Service Worker (v4)
+ * Always fetches latest code when online; falls back to offline cache when Wi-Fi drops.
  */
 
-const CACHE_NAME = 'bandscan-pwa-v2';
+const CACHE_NAME = 'bandscan-pwa-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -36,18 +37,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Network-First: Always grab fresh code when online, fall back to cache when offline
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const networkFetch = fetch(event.request)
-        .then((res) => {
-          if (res && res.status === 200) {
-            const clone = res.clone();
-            caches.open(CACHE_NAME).then((c) => c.put(event.request, clone));
-          }
-          return res;
-        })
-        .catch(() => cached);
-      return cached || networkFetch;
-    })
+    fetch(event.request)
+      .then((res) => {
+        if (res && res.status === 200) {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then((c) => c.put(event.request, clone));
+        }
+        return res;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
