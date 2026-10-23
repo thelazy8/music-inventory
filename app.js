@@ -1,5 +1,5 @@
 /**
- * app.js - Complete Controller (v9: 100% Untruncated)
+ * app.js - Complete Controller (Pulls School_Header, Return_Info, & School_Logo from Master Sheet)
  */
 const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbzSdFeiLX9wMGEkTAtviNUKABb_haLkxnAxlLJGaLYXbLO0T9PvhPOSM2pcNrjNHwkqqw/exec';
 
@@ -142,6 +142,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   localStorage.removeItem('instrument_tracker_user_pin');
   localStorage.removeItem('instrument_tracker_user_role');
 
+  // Hide School Header, Return Info, and Logo inputs from the UI (managed in Google Sheet Settings tab only)
+  if (UI.qrSchoolHeaderInput && UI.qrSchoolHeaderInput.closest('.form-row')) {
+    UI.qrSchoolHeaderInput.closest('.form-row').style.display = 'none';
+  }
+  if (UI.qrLogoFileInput && UI.qrLogoFileInput.parentElement) {
+    UI.qrLogoFileInput.parentElement.style.display = 'none';
+  }
+  if (UI.btnClearLogo) UI.btnClearLogo.style.display = 'none';
+
   const params = new URLSearchParams(window.location.search);
   const apiParam = params.get('api');
   if (apiParam && apiParam.startsWith('https://script.google.com/')) {
@@ -154,9 +163,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     UI.qrTemplateSelect.value = AppState.averyTemplate;
     updateStartColOptions();
   }
-  UI.qrSchoolHeaderInput.value = AppState.schoolHeader;
-  UI.qrReturnInfoInput.value = AppState.returnInfo;
-  if (AppState.schoolLogoDataUrl) UI.btnClearLogo.style.display = 'inline-block';
 
   bindEvents();
   await window.TrackerDB.init();
@@ -173,6 +179,22 @@ function getGasUrl() {
   if (DEFAULT_GAS_URL && DEFAULT_GAS_URL.startsWith('https://script.google.com/')) return DEFAULT_GAS_URL.trim();
   const saved = localStorage.getItem(STORAGE_KEYS.GAS_URL);
   return saved && saved.startsWith('https://script.google.com/') ? saved.trim() : '';
+}
+
+function applyMasterSheetBranding(data) {
+  if (typeof data.schoolHeader === 'string' && data.schoolHeader) {
+    AppState.schoolHeader = data.schoolHeader;
+    localStorage.setItem(STORAGE_KEYS.SCHOOL_HEADER, data.schoolHeader);
+  }
+  if (typeof data.returnInfo === 'string' && data.returnInfo) {
+    AppState.returnInfo = data.returnInfo;
+    localStorage.setItem(STORAGE_KEYS.RETURN_INFO, data.returnInfo);
+  }
+  if (typeof data.schoolLogo === 'string') {
+    AppState.schoolLogoDataUrl = data.schoolLogo;
+    if (data.schoolLogo) localStorage.setItem(STORAGE_KEYS.SCHOOL_LOGO, data.schoolLogo);
+    else localStorage.removeItem(STORAGE_KEYS.SCHOOL_LOGO);
+  }
 }
 
 function showLoginScreen() {
@@ -208,17 +230,8 @@ async function handleLoginAttempt() {
     if (!role) return showLoginError('Invalid Access PIN.');
 
     completeLoginSession(name, pin, role);
+    applyMasterSheetBranding(data);
 
-    if (data.schoolHeader) {
-      AppState.schoolHeader = data.schoolHeader;
-      localStorage.setItem(STORAGE_KEYS.SCHOOL_HEADER, data.schoolHeader);
-      UI.qrSchoolHeaderInput.value = data.schoolHeader;
-    }
-    if (data.returnInfo) {
-      AppState.returnInfo = data.returnInfo;
-      localStorage.setItem(STORAGE_KEYS.RETURN_INFO, data.returnInfo);
-      UI.qrReturnInfoInput.value = data.returnInfo;
-    }
     if (Array.isArray(data.roster)) {
       await window.TrackerDB.saveServerBundle({
         roster: data.roster || [], instruments: data.instruments || [], logs: data.logs || [], repairs: data.repairs || []
@@ -294,10 +307,12 @@ async function syncWithServer(showAlert = false) {
     if (data && Array.isArray(data.roster)) {
       if (data.role) AppState.userRole = data.role;
       unlockAppWithRole(AppState.userName, AppState.userRole);
+      applyMasterSheetBranding(data);
       await window.TrackerDB.saveServerBundle({
         roster: data.roster, instruments: data.instruments || [], logs: data.logs || [], repairs: data.repairs || []
       });
       await reloadMemoryFromIndexedDB();
+      if (document.getElementById('viewQr').classList.contains('active')) renderLabelSheets();
       if (showAlert) alert(`Synced ${AppState.rosterList.length} students & ${AppState.instrumentsList.length} instruments.`);
     }
   } catch (err) {
@@ -830,12 +845,10 @@ function renderLabelSheets() {
   const mode = UI.qrTypeSelect.value;
   const ensFilter = UI.qrEnsembleSelect.value;
   const customQuery = UI.qrCustomQueryInput ? UI.qrCustomQueryInput.value : '';
-  const schoolHeader = UI.qrSchoolHeaderInput.value.trim() || 'MS MUSIC PROGRAM';
-  const returnInfo = UI.qrReturnInfoInput.value.trim() || 'If found, return to Music Room';
+  const schoolHeader = AppState.schoolHeader || 'MS MUSIC PROGRAM';
+  const returnInfo = AppState.returnInfo || 'If found, return to Music Room';
 
   localStorage.setItem(STORAGE_KEYS.AVERY_TEMPLATE, tpl);
-  localStorage.setItem(STORAGE_KEYS.SCHOOL_HEADER, schoolHeader);
-  localStorage.setItem(STORAGE_KEYS.RETURN_INFO, returnInfo);
 
   const labelItems = [];
   for (let s = 0; s < emptySkipCount; s++) labelItems.push({ emptySlot: true });
@@ -1175,33 +1188,12 @@ function bindEvents() {
 
   UI.qrEnsembleSelect.addEventListener('change', renderLabelSheets);
   if (UI.qrCustomQueryInput) UI.qrCustomQueryInput.addEventListener('input', renderLabelSheets);
-  UI.qrSchoolHeaderInput.addEventListener('input', renderLabelSheets);
-  UI.qrReturnInfoInput.addEventListener('input', renderLabelSheets);
   UI.qrInputPrimary.addEventListener('input', renderLabelSheets);
   UI.qrInputSecondary.addEventListener('input', renderLabelSheets);
   if (UI.qrInputBrand) UI.qrInputBrand.addEventListener('input', renderLabelSheets);
   if (UI.qrInputModel) UI.qrInputModel.addEventListener('input', renderLabelSheets);
   if (UI.qrInputSerial) UI.qrInputSerial.addEventListener('input', renderLabelSheets);
 
-  UI.qrLogoFileInput.addEventListener('change', (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      AppState.schoolLogoDataUrl = ev.target.result;
-      localStorage.setItem(STORAGE_KEYS.SCHOOL_LOGO, AppState.schoolLogoDataUrl);
-      UI.btnClearLogo.style.display = 'inline-block';
-      renderLabelSheets();
-    };
-    reader.readAsDataURL(file);
-  });
-  UI.btnClearLogo.addEventListener('click', () => {
-    AppState.schoolLogoDataUrl = '';
-    localStorage.removeItem(STORAGE_KEYS.SCHOOL_LOGO);
-    UI.qrLogoFileInput.value = '';
-    UI.btnClearLogo.style.display = 'none';
-    renderLabelSheets();
-  });
   UI.btnPrintQr.addEventListener('click', () => window.print());
 
   UI.syncBadge.addEventListener('click', () => syncWithServer(false));
