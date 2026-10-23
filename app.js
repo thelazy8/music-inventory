@@ -6,7 +6,7 @@
  */
 
 // 👇👇 PASTE YOUR GOOGLE APPS SCRIPT WEB APP (/exec) URL BETWEEN THE QUOTES BELOW 👇👇
-const DEFAULT_GAS_URL = 'PASTE_YOUR_GOOGLE_APPS_SCRIPT_URL_HERE';
+const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbzSdFeiLX9wMGEkTAtviNUKABb_haLkxnAxlLJGaLYXbLO0T9PvhPOSM2pcNrjNHwkqqw/exec';
 
 const STORAGE_KEYS = {
   GAS_URL: 'instrument_tracker_gas_url',
