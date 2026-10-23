@@ -1,7 +1,4 @@
-/**
- * app.js - Complete Controller (v12: Wide Camera Layout, Smart Status/Date Search,
- * Instrument/Section Column Normalization, & 1-Tap "Assign to Student?" Button)
- */
+// app.js - Complete Controller (v13: Compact & 100% Untruncated)
 const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbzSdFeiLX9wMGEkTAtviNUKABb_haLkxnAxlLJGaLYXbLO0T9PvhPOSM2pcNrjNHwkqqw/exec';
 
 const STORAGE_KEYS = {
@@ -43,9 +40,10 @@ const AppState = {
   activeStudent: null,
   awaitingIdLink: false,
   pendingRepairInstrument: null,
-  pendingAssignOffer: null, // { student, section, caseId }
   pendingInvoiceBase64: '',
   pendingInvoiceMime: '',
+  pendingTx: null,
+  onUnlistedResolved: null,
   scannerStarted: false,
   html5QrCode: null,
   lastScanTime: 0,
@@ -88,7 +86,6 @@ const UI = {
   resultSubtitle: document.getElementById('resultSubtitle'),
   btnAddNote: document.getElementById('btnAddNote'),
   btnNextStudent: document.getElementById('btnNextStudent'),
-  btnAssignInstrument: null, // Injected dynamically on startup
   keypadGrid: document.getElementById('keypadGrid'),
   searchInput: document.getElementById('searchInput'),
   searchResultsContainer: document.getElementById('searchResultsContainer'),
@@ -146,101 +143,183 @@ const UI = {
   btnSaveSettings: document.getElementById('btnSaveSettings')
 };
 
-/**
- * Injects the narrow horizontal student bar, wide full-screen camera window,
- * smaller keypad CSS, and the "📌 Assign to Student?" button without needing to edit index.html.
- */
-function injectWideCameraLayoutAndAssignButton() {
+function getLocalTimestamp() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  let hr = d.getHours();
+  const ampm = hr >= 12 ? 'PM' : 'AM';
+  hr = hr % 12 || 12;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(hr)}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${ampm}`;
+}
+
+function getSec(obj) {
+  return obj ? String(obj.Section || obj.Instrument || '').trim() : '';
+}
+
+function getStudentAssignedPairs(stu) {
+  if (!stu) return [];
+  const secs = String(stu.Section || stu.Instrument || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const cases = String(stu.Assigned_Case_ID || '').split(',').map((c) => c.trim()).filter(Boolean);
+  const pairs = [];
+  const len = Math.max(secs.length, cases.length);
+  for (let i = 0; i < len; i++) {
+    const s = secs[i] || secs[0] || '';
+    const c = cases[i] || '';
+    if (s && c && s !== 'Unassigned') pairs.push({ section: s, caseId: c });
+  }
+  return pairs;
+}
+
+function formatAssignedPairsText(stu) {
+  const pairs = getStudentAssignedPairs(stu);
+  return pairs.length === 0 ? 'UNASSIGNED' : pairs.map((p) => `${p.section} #${p.caseId}`).join(', ');
+}
+
+function isInstrumentAssignedToStudent(stu, section, caseId) {
+  const sUp = String(section || '').trim().toUpperCase();
+  const cUp = String(caseId || '').trim().toUpperCase();
+  return getStudentAssignedPairs(stu).some((p) => p.section.toUpperCase() === sUp && p.caseId.toUpperCase() === cUp);
+}
+
+function getAuthoritativeInstrumentEnsemble(section, caseId) {
+  const secUp = String(section || '').trim().toUpperCase();
+  const caseUp = String(caseId || '').trim().toUpperCase();
+  const key = `${secUp}|${caseUp}`;
+  const exactMaster = AppState.instrumentsList.find((i) => i.inst_key === key && i.in_master_tab && i.Ensemble);
+  if (exactMaster) return exactMaster.Ensemble;
+  const secMaster = AppState.instrumentsList.find((i) => getSec(i).toUpperCase() === secUp && i.in_master_tab && i.Ensemble);
+  if (secMaster) return secMaster.Ensemble;
+  const anyMatch = AppState.instrumentsList.find((i) => i.inst_key === key && i.Ensemble);
+  if (anyMatch) return anyMatch.Ensemble;
+  const anySec = AppState.instrumentsList.find((i) => getSec(i).toUpperCase() === secUp && i.Ensemble);
+  return anySec ? anySec.Ensemble : '';
+}
+
+function checkEnsembleCompatibility(student, instSection, instCaseId) {
+  if (!student || isRepairShopEntity(student)) return { allowed: true, instEnsemble: 'Repair' };
+  const stuEns = String(student.Ensemble || '').trim();
+  const stuEnsUp = stuEns.toUpperCase();
+  const instEns = getAuthoritativeInstrumentEnsemble(instSection, instCaseId) || stuEns;
+  const instEnsUp = instEns.toUpperCase();
+  if (stuEnsUp === 'BOTH' || stuEnsUp === 'ALL' || !instEnsUp || instEnsUp === 'BOTH' || instEnsUp === 'ALL') {
+    return { allowed: true, instEnsemble: instEns || stuEns };
+  }
+  return { allowed: stuEnsUp === instEnsUp, stuEnsemble: stuEns, instEnsemble: instEns };
+}
+
+function getInstrumentCurrentState(section, caseId) {
+  const secUp = String(section || '').trim().toUpperCase();
+  const caseUp = String(caseId || '').trim().toUpperCase();
+  const logs = AppState.scanHistory.filter(
+    (l) => resolveLogInstrumentName(l, null).toUpperCase() === secUp && String(l.Case_ID || '').trim().toUpperCase() === caseUp
+  );
+  const lastLog = logs.length > 0 ? logs[logs.length - 1] : null;
+  const isOut = Boolean(lastLog && lastLog.Action === 'CHECK_OUT');
+  const inRepair = Boolean(isOut && String(lastLog.Status_Flag) === 'SENT_TO_REPAIR');
+  return { isOut, inRepair, lastLog };
+}
+
+function injectWideCameraAndModals() {
   const style = document.createElement('style');
   style.textContent = `
-    .workspace {
-      display: flex !important;
-      flex-direction: column !important;
-      gap: 6px !important;
-      padding: 0 10px 6px 10px !important;
-    }
-    .student-card {
-      flex: 0 0 auto !important;
-      padding: 6px 10px !important;
-      display: flex !important;
-      flex-direction: row !important;
-      flex-wrap: wrap !important;
-      align-items: center !important;
-      justify-content: space-between !important;
-      gap: 8px !important;
-    }
-    .line-display-row {
-      display: flex !important;
-      align-items: center !important;
-      gap: 6px !important;
-    }
-    .line-number-value {
-      font-size: 1.45rem !important;
-    }
-    #studentDetailsBox {
-      flex: 1 1 120px !important;
-      min-width: 0 !important;
-    }
-    .student-name {
-      font-size: 0.92rem !important;
-      white-space: nowrap !important;
-      overflow: hidden !important;
-      text-overflow: ellipsis !important;
-    }
-    .student-meta {
-      font-size: 0.7rem !important;
-      margin-top: 0 !important;
-    }
-    .expected-case-box {
-      padding: 4px 8px !important;
-      flex-direction: row !important;
-      align-items: center !important;
-      gap: 8px !important;
-    }
+    .workspace { display: flex !important; flex-direction: column !important; gap: 6px !important; padding: 0 10px 6px 10px !important; }
+    .student-card { flex: 0 0 auto !important; padding: 6px 10px !important; display: flex !important; flex-direction: row !important; flex-wrap: wrap !important; align-items: center !important; justify-content: space-between !important; gap: 8px !important; }
+    .line-display-row { display: flex !important; align-items: center !important; gap: 6px !important; }
+    .line-number-value { font-size: 1.45rem !important; }
+    #studentDetailsBox { flex: 1 1 115px !important; min-width: 0 !important; }
+    .student-name { font-size: 0.92rem !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; }
+    .student-meta { font-size: 0.7rem !important; margin-top: 0 !important; }
+    .expected-case-box { padding: 4px 8px !important; flex-direction: row !important; align-items: center !important; gap: 8px !important; }
     .expected-label { font-size: 0.56rem !important; }
-    .expected-id { font-size: 0.85rem !important; }
-    .candidate-list {
-      width: 100% !important;
-      flex-direction: row !important;
-      margin: 2px 0 0 0 !important;
-    }
-    .candidate-btn {
-      flex: 1 !important;
-      padding: 4px 6px !important;
-      font-size: 0.75rem !important;
-    }
-    .camera-card {
-      flex: 1 1 auto !important;
-      width: 100% !important;
-      min-height: 170px !important;
-    }
-    .keypad-section {
-      height: 28dvh !important;
-      max-height: 195px !important;
-      padding: 0 10px 8px 10px !important;
-    }
+    .expected-id { font-size: 0.82rem !important; }
+    .candidate-list { width: 100% !important; flex-direction: row !important; margin: 2px 0 0 0 !important; }
+    .candidate-btn { flex: 1 !important; padding: 4px 6px !important; font-size: 0.75rem !important; }
+    .camera-card { flex: 1 1 auto !important; width: 100% !important; min-height: 175px !important; }
+    .keypad-section { height: 28dvh !important; max-height: 195px !important; padding: 0 10px 8px 10px !important; }
     .keypad-grid { gap: 5px !important; }
     .key-btn { font-size: 1.25rem !important; border-radius: 8px !important; }
+    .tx-hero-box { background: #0f172a; border: 2px solid #38bdf8; border-radius: 12px; padding: 12px; text-align: center; margin-bottom: 12px; }
+    .tx-hero-title { font-size: 1.55rem; font-weight: 900; color: #38bdf8; line-height: 1.15; }
+    .tx-hero-sub { font-size: 0.85rem; font-weight: 700; color: #cbd5e1; margin-top: 4px; }
+    .tx-error-banner { background: #7f1d1d; border: 1px solid #ef4444; color: #fecaca; padding: 10px; border-radius: 8px; font-size: 0.82rem; font-weight: 700; margin-bottom: 10px; text-align: center; }
+    .tx-assign-box { background: rgba(2,132,199,0.15); border: 1px solid #0284c7; border-radius: 8px; padding: 10px; margin-bottom: 12px; font-size: 0.82rem; }
   `;
   document.head.appendChild(style);
 
-  // Inject "📌 Assign to Student?" button into Result Banner
-  const actionsRow = document.querySelector('.banner-actions');
-  if (actionsRow && !document.getElementById('btnAssignInstrument')) {
-    const assignBtn = document.createElement('button');
-    assignBtn.id = 'btnAssignInstrument';
-    assignBtn.type = 'button';
-    assignBtn.className = 'banner-btn';
-    assignBtn.style.cssText = 'display:none; background:#0284c7; border-color:#7dd3fc; font-weight:800;';
-    assignBtn.textContent = '📌 Assign to Student?';
-    actionsRow.insertBefore(assignBtn, actionsRow.firstChild);
-    UI.btnAssignInstrument = assignBtn;
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = `
+    <div id="txModal" class="modal-backdrop">
+      <div class="modal-box">
+        <div id="txHeroBox" class="tx-hero-box">
+          <div id="txHeroTitle" class="tx-hero-title">🎺 TRUMPET #1</div>
+          <div id="txHeroSub" class="tx-hero-sub">Ensemble: Band</div>
+        </div>
+        <div id="txErrorBox" class="tx-error-banner" style="display:none;"></div>
+        <div id="txStudentPromptBox" style="margin-bottom:12px;">
+          <label class="field-label">Checking Out To Student (Enter Line # or Scan Student ID):</label>
+          <div style="display:flex; gap:6px; margin-bottom:6px;">
+            <input id="txLineInput" class="form-input" type="number" inputmode="numeric" placeholder="Line #" style="width:95px; font-size:1.1rem; font-weight:800;">
+            <select id="txEnsembleSelect" class="form-select" style="flex:1;">
+              <option value="Band">Band</option>
+              <option value="Orchestra">Orchestra</option>
+              <option value="Repair">🔧 Repair (#900)</option>
+            </select>
+          </div>
+          <div id="txQuickStudentChips" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:4px;"></div>
+          <div id="txSelectedStudentCard" style="margin-top:8px; padding:8px 10px; background:#0f172a; border-radius:8px; border-left:4px solid #22c55e; display:none;"></div>
+        </div>
+        <div id="txAssignBox" class="tx-assign-box" style="display:none;">
+          <label style="display:flex; align-items:center; gap:8px; font-weight:800; color:#38bdf8; cursor:pointer;">
+            <input id="chkTxAssign" type="checkbox" style="width:18px; height:18px;">
+            <span id="lblTxAssign">📌 Assign this instrument to student on Roster?</span>
+          </label>
+          <div id="txAssignModeRow" style="margin-top:8px; padding-left:26px; display:none; font-size:0.78rem; color:#cbd5e1;">
+            <label style="cursor:pointer;"><input type="radio" name="txAssignMode" value="APPEND" checked> ➕ Add as 2nd Instrument</label>
+            <label style="cursor:pointer; margin-left:10px;"><input type="radio" name="txAssignMode" value="REPLACE"> 🔄 Replace Current</label>
+          </div>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <button id="btnTxConfirm" class="btn-success-large" style="margin-bottom:0;" type="button">✓ Confirm</button>
+          <button id="btnTxCancel" class="btn-secondary" style="width:100%;" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div id="unlistedModal" class="modal-backdrop">
+      <div class="modal-box">
+        <div style="font-weight:900; font-size:1.1rem; color:#fcd34d; margin-bottom:6px;">⚠️ Unlisted Line Number</div>
+        <div id="unlistedPromptText" style="font-size:0.86rem; color:#cbd5e1; margin-bottom:12px; line-height:1.4;"></div>
+        <button id="btnUnlistedTypo" class="btn-secondary" style="width:100%; margin-bottom:12px; border:1px solid #475569;" type="button">🔙 It Was a Typo — Clear & Re-Enter Line #</button>
+        <div style="font-size:0.74rem; color:var(--text-muted); text-transform:uppercase; font-weight:700; margin-bottom:8px; text-align:center;">— OR Add New Student to Roster —</div>
+        <div class="form-row" style="margin-bottom:10px;">
+          <div><label class="field-label">Line #</label><input id="newStuLineInput" class="form-input" type="number" inputmode="numeric"></div>
+          <div>
+            <label class="field-label">Ensemble</label>
+            <select id="newStuEnsembleSelect" class="form-select">
+              <option value="Band">Band</option>
+              <option value="Orchestra">Orchestra</option>
+              <option value="Both">Both (Band & Orch)</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-bottom:12px;"><label class="field-label">Student Full Name</label><input id="newStuNameInput" class="form-input" type="text" placeholder="e.g. Sam Carter"></div>
+        <button id="btnSaveNewStudent" class="btn-primary" style="width:100%;" type="button">➕ Save Student to Roster & Continue</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(wrapper);
+
+  const actionRow = document.getElementById('studentActionButtons');
+  if (actionRow && !document.getElementById('btnAddUnlistedStu')) {
+    const addBtn = document.createElement('button');
+    addBtn.id = 'btnAddUnlistedStu';
+    addBtn.type = 'button';
+    addBtn.className = 'mini-action-btn warn-accent';
+    addBtn.style.display = 'none';
+    addBtn.textContent = '➕ Add / Fix Unlisted #';
+    actionRow.insertBefore(addBtn, actionRow.firstChild);
   }
 }
 
-/**
- * Patches TrackerDB.saveServerBundle so both "Instrument" and "Section" column headers work seamlessly.
- */
 function patchTrackerDBForInstrumentColumn() {
   window.TrackerDB.saveServerBundle = async function ({ roster = [], instruments = [], logs = [], repairs = [] }) {
     const db = await this.init();
@@ -250,13 +329,10 @@ function patchTrackerDBForInstrumentColumn() {
       const instStore = tx.objectStore('instruments');
       const histStore = tx.objectStore('scan_history');
       const repStore = tx.objectStore('repairs_history');
-
-      rosterStore.clear();
-      instStore.clear();
-      histStore.clear();
-      repStore.clear();
+      rosterStore.clear(); instStore.clear(); histStore.clear(); repStore.clear();
 
       const instMap = new Map();
+      const stuMap = new Map();
       let hasRepairShop = false;
 
       for (const rawInst of instruments) {
@@ -265,19 +341,11 @@ function patchTrackerDBForInstrumentColumn() {
         if (!section || !caseId) continue;
         const instKey = `${section.toUpperCase()}|${caseId.toUpperCase()}`;
         instMap.set(instKey, {
-          inst_key: instKey,
-          Ensemble: String(rawInst.Ensemble || '').trim(),
-          Section: section,
-          Instrument: section,
-          Case_ID: caseId,
-          Brand: String(rawInst.Brand || '').trim(),
-          Model: String(rawInst.Model || '').trim(),
-          Serial: String(rawInst.Serial || '').trim(),
-          Notes: String(rawInst.Notes || '').trim(),
-          Assigned_Student: 'Unassigned / Spare',
-          Assigned_Line: null,
-          in_master_tab: true,
-          in_roster: false
+          inst_key: instKey, Ensemble: String(rawInst.Ensemble || '').trim(),
+          Section: section, Instrument: section, Case_ID: caseId,
+          Brand: String(rawInst.Brand || '').trim(), Model: String(rawInst.Model || '').trim(),
+          Serial: String(rawInst.Serial || '').trim(), Notes: String(rawInst.Notes || '').trim(),
+          Assigned_Student: 'Unassigned / Spare', Assigned_Line: null, in_master_tab: true, in_roster: false
         });
       }
 
@@ -289,62 +357,62 @@ function patchTrackerDBForInstrumentColumn() {
         const caseId = String(raw.Assigned_Case_ID || raw.Case_ID || '').trim();
         const studentId = String(raw.Student_ID || '').trim();
         const compositeId = `${ensemble.toUpperCase()}|${lineNum}`;
-
         if (ensemble.toUpperCase() === 'REPAIR' || lineNum === 900) hasRepairShop = true;
 
-        rosterStore.put({
-          composite_id: compositeId,
-          Line_Number: lineNum,
-          Student_Name: String(raw.Student_Name || '').trim(),
-          Ensemble: ensemble,
-          Section: section,
-          Instrument: section,
-          Assigned_Case_ID: caseId,
-          Student_ID: studentId
-        });
+        if (stuMap.has(compositeId)) {
+          const prev = stuMap.get(compositeId);
+          if (section && caseId) {
+            prev.Section = [prev.Section, section].filter(Boolean).join(', ');
+            prev.Instrument = prev.Section;
+            prev.Assigned_Case_ID = [prev.Assigned_Case_ID, caseId].filter(Boolean).join(', ');
+          }
+          if (studentId && !prev.Student_ID) prev.Student_ID = studentId;
+        } else {
+          stuMap.set(compositeId, {
+            composite_id: compositeId, Line_Number: lineNum, Student_Name: String(raw.Student_Name || '').trim(),
+            Ensemble: ensemble, Section: section, Instrument: section, Assigned_Case_ID: caseId, Student_ID: studentId
+          });
+        }
 
-        if (section && caseId && ensemble.toUpperCase() !== 'REPAIR') {
-          const instKey = `${section.toUpperCase()}|${caseId.toUpperCase()}`;
+        const tempStu = stuMap.get(compositeId);
+        for (const pair of getStudentAssignedPairs(tempStu)) {
+          if (ensemble.toUpperCase() === 'REPAIR') continue;
+          const instKey = `${pair.section.toUpperCase()}|${pair.caseId.toUpperCase()}`;
           const existing = instMap.get(instKey);
           if (existing) {
-            existing.Ensemble = existing.Ensemble || ensemble;
-            existing.Assigned_Student = String(raw.Student_Name || '').trim();
+            existing.Assigned_Student = tempStu.Student_Name;
             existing.Assigned_Line = lineNum;
             existing.in_roster = true;
           } else {
+            let masterSecEns = '';
+            for (const mInst of instMap.values()) {
+              if (mInst.in_master_tab && mInst.Section.toUpperCase() === pair.section.toUpperCase() && mInst.Ensemble) {
+                masterSecEns = mInst.Ensemble; break;
+              }
+            }
             instMap.set(instKey, {
-              inst_key: instKey,
-              Ensemble: ensemble,
-              Section: section,
-              Instrument: section,
-              Case_ID: caseId,
-              Brand: String(raw.Brand || '').trim(),
-              Model: String(raw.Model || '').trim(),
-              Serial: String(raw.Serial || '').trim(),
-              Notes: '',
-              Assigned_Student: String(raw.Student_Name || '').trim(),
-              Assigned_Line: lineNum,
-              in_master_tab: false,
-              in_roster: true
+              inst_key: instKey, Ensemble: masterSecEns || ensemble, Section: pair.section, Instrument: pair.section,
+              Case_ID: pair.caseId, Brand: String(raw.Brand || '').trim(), Model: String(raw.Model || '').trim(),
+              Serial: String(raw.Serial || '').trim(), Notes: '', Assigned_Student: tempStu.Student_Name,
+              Assigned_Line: lineNum, in_master_tab: false, in_roster: true
             });
           }
         }
       }
 
+      for (const stuObj of stuMap.values()) rosterStore.put(stuObj);
       if (!hasRepairShop) {
         rosterStore.put({
           composite_id: 'REPAIR|900', Line_Number: 900, Student_Name: '🔧 Repair Shop',
           Ensemble: 'Repair', Section: 'Repair Vendor', Instrument: 'Repair Vendor', Assigned_Case_ID: 'ANY', Student_ID: 'SHOP900'
         });
       }
-
       for (const instObj of instMap.values()) instStore.put(instObj);
       for (const log of logs) {
         const cleanSec = String(log.Section || log.Instrument || '').trim();
         histStore.add({ ...log, Section: cleanSec, Instrument: cleanSec });
       }
       for (const rep of repairs) repStore.add(rep);
-
       tx.oncomplete = () => resolve();
       tx.onerror = (e) => reject(e.target.error);
     });
@@ -352,10 +420,9 @@ function patchTrackerDBForInstrumentColumn() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  injectWideCameraLayoutAndAssignButton();
+  injectWideCameraAndModals();
   patchTrackerDBForInstrumentColumn();
-
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js?v=12').catch(() => {});
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js?v=13').catch(() => {});
   localStorage.removeItem('instrument_tracker_user_pin');
   localStorage.removeItem('instrument_tracker_user_role');
 
@@ -447,7 +514,6 @@ async function handleLoginAttempt() {
   const name = UI.loginNameInput.value.trim();
   const pin = UI.loginPinInput.value.trim();
   const url = getGasUrl();
-
   if (!name) return showLoginError('Please enter your name.');
   if (!pin) return showLoginError('Please enter your Access PIN.');
   if (!url) return showLoginError('Database URL not configured in app.js yet.');
@@ -460,7 +526,6 @@ async function handleLoginAttempt() {
     const authUrl = `${url}${url.includes('?') ? '&' : '?'}pin=${encodeURIComponent(pin)}`;
     const res = await fetch(authUrl, { method: 'GET', redirect: 'follow' });
     const data = await res.json();
-
     if (data.status === 'UNAUTHORIZED') return showLoginError('Invalid Access PIN. Please check with the Music Director.');
 
     let role = data.role || (pin === '9988' ? 'ADMIN' : pin === '2468' ? 'VOLUNTEER' : null);
@@ -468,7 +533,6 @@ async function handleLoginAttempt() {
 
     completeLoginSession(name, pin, role);
     applyMasterSheetBranding(data);
-
     if (Array.isArray(data.roster)) {
       await window.TrackerDB.saveServerBundle({
         roster: data.roster || [], instruments: data.instruments || [], logs: data.logs || [], repairs: data.repairs || []
@@ -508,11 +572,6 @@ function unlockAppWithRole(name, role) {
   UI.tabQrGenerator.classList.toggle('admin-locked', !isAdmin);
   UI.btnSettings.style.display = isAdmin ? 'inline-block' : 'none';
   startAlwaysOnCamera();
-}
-
-function getSec(obj) {
-  if (!obj) return '';
-  return String(obj.Section || obj.Instrument || '').trim();
 }
 
 async function reloadMemoryFromIndexedDB() {
@@ -587,17 +646,19 @@ function lookupByLineNumber(inputStr) {
   AppState.awaitingIdLink = false;
   UI.btnLinkSchoolId.textContent = '🔗 Link ID';
   UI.studentCard.classList.remove('repair-active');
+  const addUnlistedBtn = document.getElementById('btnAddUnlistedStu');
+  if (addUnlistedBtn) addUnlistedBtn.style.display = 'none';
 
   if (!inputStr) {
     UI.lineDisplay.textContent = '---';
-    UI.studentName.textContent = 'Type Line # or Scan ID';
-    UI.studentMeta.textContent = 'Use #900 for Repairs';
+    UI.studentName.textContent = 'Scan Case QR or Type Line #';
+    UI.studentMeta.textContent = 'Scan instrument first OR enter student Line #';
     UI.expectedCase.textContent = '—';
     UI.candidateList.style.display = 'none';
     UI.studentActionButtons.style.display = 'none';
     UI.studentCard.classList.remove('ready-to-scan');
     UI.cameraCard.classList.remove('active-target');
-    UI.cameraStatusBadge.textContent = 'Ready: Scan ID or Type Line #';
+    UI.cameraStatusBadge.textContent = '📷 Ready: Scan Instrument QR or Student ID';
     AppState.matchedCandidates = [];
     AppState.activeStudent = null;
     return;
@@ -616,20 +677,61 @@ function lookupByLineNumber(inputStr) {
   if (matches.length === 1) selectActiveStudent(matches[0], false);
   else if (matches.length > 1) selectActiveStudent(matches[0], true);
   else {
-    AppState.activeStudent = {
-      Line_Number: lineNum, Student_Name: `Unlisted (#${lineNum})`,
-      Ensemble: AppState.ensembleFilter === 'ALL' ? 'Unlisted' : AppState.ensembleFilter,
-      Section: '', Instrument: '', Assigned_Case_ID: ''
-    };
+    AppState.activeStudent = null;
     UI.candidateList.style.display = 'none';
-    UI.studentName.textContent = `Line #${lineNum} Not Found`;
-    UI.studentMeta.textContent = 'Scan case or tap Manual';
-    UI.expectedCase.textContent = 'UNASSIGNED';
+    UI.studentName.textContent = `⚠️ Line #${lineNum} Not on Roster`;
+    UI.studentMeta.textContent = 'Tap button to fix typo or add student';
+    UI.expectedCase.textContent = 'UNLISTED';
     UI.studentActionButtons.style.display = 'flex';
-    UI.studentCard.classList.add('ready-to-scan');
-    UI.cameraCard.classList.add('active-target');
-    UI.cameraStatusBadge.textContent = '🎯 Scan Case QR or Tap Manual';
+    UI.btnManualCase.style.display = 'none';
+    UI.btnLinkSchoolId.style.display = 'none';
+    if (addUnlistedBtn) addUnlistedBtn.style.display = 'inline-block';
+    UI.studentCard.classList.remove('ready-to-scan');
+    UI.cameraCard.classList.remove('active-target');
+    UI.cameraStatusBadge.textContent = `⚠️ Line #${lineNum} Unlisted — Tap Add/Fix Above`;
   }
+}
+
+function openUnlistedLineModal(lineNum, onStudentCreatedCallback) {
+  const modal = document.getElementById('unlistedModal');
+  document.getElementById('unlistedPromptText').innerHTML =
+    `Line <strong>#${lineNum}</strong> is not on the Roster. Was that a typo, or would you like to add a new student to Line #${lineNum}?`;
+  document.getElementById('newStuLineInput').value = lineNum;
+  document.getElementById('newStuEnsembleSelect').value = AppState.ensembleFilter === 'Orchestra' ? 'Orchestra' : 'Band';
+  document.getElementById('newStuNameInput').value = '';
+  AppState.onUnlistedResolved = onStudentCreatedCallback || null;
+  modal.classList.add('open');
+}
+
+async function handleSaveNewStudentFromModal() {
+  const lineNum = parseInt(document.getElementById('newStuLineInput').value, 10);
+  const ens = document.getElementById('newStuEnsembleSelect').value;
+  const name = document.getElementById('newStuNameInput').value.trim();
+  if (!lineNum || isNaN(lineNum)) return alert('Please enter a valid Line Number.');
+  if (!name) return alert('Please enter the student name.');
+
+  const newStu = {
+    composite_id: `${ens.toUpperCase()}|${lineNum}`, Line_Number: lineNum, Student_Name: name,
+    Ensemble: ens, Section: '', Instrument: '', Assigned_Case_ID: '', Student_ID: ''
+  };
+  AppState.rosterList.push(newStu);
+  await window.TrackerDB.enqueueItem({
+    Request_Type: 'ADD_STUDENT', Auth_PIN: AppState.userPin, Line_Number: lineNum,
+    Student_Name: name, Ensemble: ens, Section: '', Case_ID: ''
+  });
+
+  document.getElementById('unlistedModal').classList.remove('open');
+  playTone('MATCH');
+  if (typeof AppState.onUnlistedResolved === 'function') {
+    const cb = AppState.onUnlistedResolved;
+    AppState.onUnlistedResolved = null;
+    cb(newStu);
+  } else {
+    AppState.currentInput = String(lineNum);
+    lookupByLineNumber(AppState.currentInput);
+  }
+  updateSyncBadge();
+  flushOutboundQueue();
 }
 
 function isRepairShopEntity(student) {
@@ -639,32 +741,29 @@ function isRepairShopEntity(student) {
 function selectActiveStudent(student, showCandidateSwitcher) {
   AppState.activeStudent = student;
   const isRepair = isRepairShopEntity(student);
-  const stuSec = getSec(student);
+  const addUnlistedBtn = document.getElementById('btnAddUnlistedStu');
+  if (addUnlistedBtn) addUnlistedBtn.style.display = 'none';
+  UI.btnManualCase.style.display = 'inline-block';
 
   UI.studentName.textContent = student.Student_Name;
   UI.studentMeta.textContent = isRepair
     ? `Repair (${AppState.actionMode === 'CHECK_OUT' ? 'OUT to Shop' : 'IN from Shop'})`
     : `${student.Ensemble} #${student.Line_Number}${student.Student_ID ? ' • ID✓' : ''}`;
-  UI.expectedCase.textContent = isRepair
-    ? 'Any Case'
-    : (stuSec && student.Assigned_Case_ID) ? `${stuSec} #${student.Assigned_Case_ID}` : 'UNASSIGNED';
+  UI.expectedCase.textContent = isRepair ? 'Any Case' : formatAssignedPairsText(student);
 
   UI.studentActionButtons.style.display = 'flex';
   UI.btnLinkSchoolId.style.display = isRepair ? 'none' : 'inline-block';
   UI.studentCard.classList.add('ready-to-scan');
   UI.studentCard.classList.toggle('repair-active', isRepair);
   UI.cameraCard.classList.add('active-target');
-  UI.cameraStatusBadge.textContent = isRepair
-    ? '🔧 Scan Instrument Case for Repair'
-    : (stuSec && student.Assigned_Case_ID) ? `🎯 Scan ${stuSec} #${student.Assigned_Case_ID}` : '🎯 Scan Instrument Case QR';
+  UI.cameraStatusBadge.textContent = isRepair ? '🔧 Scan Instrument Case for Repair' : `🎯 Scan Instrument QR for ${student.Student_Name}`;
 
   if (showCandidateSwitcher && AppState.matchedCandidates.length > 1) {
     UI.candidateList.style.display = 'flex';
     UI.candidateList.innerHTML = AppState.matchedCandidates.map((cand, idx) => {
       const isSel = cand.composite_id === student.composite_id ? 'selected' : '';
-      const cSec = getSec(cand);
       return `<button class="candidate-btn ${isSel}" data-idx="${idx}" type="button">
-        <strong>${cand.Ensemble}: ${cand.Student_Name}</strong> (${cSec ? cSec + ' #' + cand.Assigned_Case_ID : 'Unassigned'})
+        <strong>${cand.Ensemble}: ${cand.Student_Name}</strong> (${formatAssignedPairsText(cand)})
       </button>`;
     }).join('');
     UI.candidateList.querySelectorAll('.candidate-btn').forEach((btn) => {
@@ -677,8 +776,8 @@ function selectActiveStudent(student, showCandidateSwitcher) {
 
 function resetScannerState() {
   UI.resultBanner.classList.remove('visible');
-  if (UI.btnAssignInstrument) UI.btnAssignInstrument.style.display = 'none';
-  AppState.pendingAssignOffer = null;
+  document.getElementById('txModal').classList.remove('open');
+  AppState.pendingTx = null;
   AppState.currentInput = '';
   AppState.postTransactionReset = false;
   lookupByLineNumber('');
@@ -689,27 +788,49 @@ async function startAlwaysOnCamera() {
   AppState.scannerStarted = true;
   try {
     AppState.html5QrCode = new Html5Qrcode('reader');
-    await AppState.html5QrCode.start(
-      { facingMode: 'environment' },
-      { fps: 15, qrbox: { width: 220, height: 170 } },
-      onCodeScanned,
-      () => {}
-    );
+    await AppState.html5QrCode.start({ facingMode: 'environment' }, { fps: 15, qrbox: { width: 220, height: 170 } }, onCodeScanned, () => {});
   } catch (err) {
     AppState.scannerStarted = false;
     UI.cameraStatusBadge.textContent = '⚠️ Allow HTTPS Camera Access';
   }
 }
 
-async function onCodeScanned(rawText) {
-  if (!UI.loginOverlay.classList.contains('hidden')) return;
-  if (UI.manualCaseModal.classList.contains('open') || UI.repairModal.classList.contains('open')) return;
+function isAnyModalBlockingScan() {
+  if (!UI.loginOverlay.classList.contains('hidden')) return true;
+  if (UI.manualCaseModal.classList.contains('open')) return true;
+  if (UI.repairModal.classList.contains('open')) return true;
+  if (document.getElementById('unlistedModal').classList.contains('open')) return true;
+  return false;
+}
 
+async function onCodeScanned(rawText) {
+  if (isAnyModalBlockingScan()) return;
   const now = Date.now();
-  if (now - AppState.lastScanTime < 1400) return;
+  if (now - AppState.lastScanTime < 1500) return;
   const code = String(rawText || '').trim();
   if (!code) return;
   unlockAudio();
+
+  const txModalOpen = document.getElementById('txModal').classList.contains('open');
+  if (txModalOpen && AppState.pendingTx && AppState.pendingTx.mode === 'CHECK_OUT') {
+    if (code.toUpperCase().startsWith('STU|')) {
+      AppState.lastScanTime = now;
+      const parts = code.split('|');
+      const ens = (parts[1] || '').trim().toUpperCase();
+      const lineNum = parseInt(parts[2], 10);
+      const stu = AppState.rosterList.find((s) => s.Ensemble.toUpperCase() === ens && Number(s.Line_Number) === lineNum);
+      if (stu) { playTone('MATCH'); setTxModalSelectedStudent(stu); }
+      return;
+    }
+    const stuByBadge = AppState.rosterList.find((s) => s.Student_ID && String(s.Student_ID).trim().toUpperCase() === code.toUpperCase());
+    if (stuByBadge) {
+      AppState.lastScanTime = now;
+      playTone('MATCH');
+      setTxModalSelectedStudent(stuByBadge);
+    }
+    return;
+  }
+  if (txModalOpen) return;
 
   if (AppState.awaitingIdLink && AppState.activeStudent) {
     AppState.lastScanTime = now;
@@ -750,15 +871,9 @@ async function onCodeScanned(rawText) {
   }
 
   if (code.toUpperCase().startsWith('INST|')) {
-    if (!AppState.activeStudent) {
-      UI.cameraStatusBadge.textContent = '⚠️ Enter Line # (or #900 for Repair) First!';
-      playTone('WARNING');
-      AppState.lastScanTime = now;
-      return;
-    }
     AppState.lastScanTime = now;
     const parts = code.split('|');
-    await handleInstrumentScanOrRepair((parts[1] || '').trim(), (parts[2] || '').trim(), '');
+    await handleInstrumentScanFlow((parts[1] || '').trim(), (parts[2] || '').trim(), '');
     return;
   }
 
@@ -772,25 +887,279 @@ async function onCodeScanned(rawText) {
     AppState.matchedCandidates = [studentByBadge];
     selectActiveStudent(studentByBadge, false);
     playTone('MATCH');
-    return;
-  }
-
-  if (AppState.activeStudent) {
-    AppState.lastScanTime = now;
-    let scannedSection = getSec(AppState.activeStudent) || 'Instrument';
-    let scannedCaseId = code;
-    if (code.includes('-')) {
-      const [sec, num] = code.split('-');
-      scannedSection = sec.trim();
-      scannedCaseId = num.trim();
-    }
-    await handleInstrumentScanOrRepair(scannedSection, scannedCaseId, '');
   }
 }
 
-async function handleInstrumentScanOrRepair(scannedSection, scannedCaseId, initialNote = '') {
-  if (isRepairShopEntity(AppState.activeStudent)) openRepairDetailsModal(scannedSection, scannedCaseId, initialNote);
-  else await evaluateAndLogInstrumentScan(scannedSection, scannedCaseId, initialNote);
+async function handleInstrumentScanFlow(scannedSection, scannedCaseId, initialNote = '') {
+  if (AppState.currentInput && !AppState.activeStudent) {
+    const unlistedNum = parseInt(AppState.currentInput, 10);
+    playTone('WARNING');
+    openUnlistedLineModal(unlistedNum, (createdStu) => {
+      selectActiveStudent(createdStu, false);
+      openTransactionConfirmationModal(scannedSection, scannedCaseId, initialNote);
+    });
+    return;
+  }
+  if (AppState.activeStudent && isRepairShopEntity(AppState.activeStudent)) {
+    openRepairDetailsModal(scannedSection, scannedCaseId, initialNote);
+    return;
+  }
+  openTransactionConfirmationModal(scannedSection, scannedCaseId, initialNote);
+}
+
+function openTransactionConfirmationModal(section, caseId, initialNote = '') {
+  const instState = getInstrumentCurrentState(section, caseId);
+  const authEns = getAuthoritativeInstrumentEnsemble(section, caseId) || 'Music';
+
+  if (instState.isOut && instState.inRepair) {
+    AppState.actionMode = 'CHECK_IN';
+    applyModeUI('CHECK_IN');
+    openRepairDetailsModal(section, caseId, initialNote);
+    return;
+  }
+
+  playTone('MATCH');
+  vibrateDevice('MATCH');
+
+  const txModal = document.getElementById('txModal');
+  const heroTitle = document.getElementById('txHeroTitle');
+  const heroSub = document.getElementById('txHeroSub');
+  const errorBox = document.getElementById('txErrorBox');
+  const stuPromptBox = document.getElementById('txStudentPromptBox');
+  const assignBox = document.getElementById('txAssignBox');
+  const btnConfirm = document.getElementById('btnTxConfirm');
+  const txLineInput = document.getElementById('txLineInput');
+  const txEnsembleSelect = document.getElementById('txEnsembleSelect');
+  const quickChips = document.getElementById('txQuickStudentChips');
+
+  heroTitle.textContent = `🎺 ${section.toUpperCase()} #${caseId}`;
+  errorBox.style.display = 'none';
+
+  if (instState.isOut && instState.lastLog) {
+    const outLog = instState.lastLog;
+    heroSub.innerHTML = `Ensemble: <strong>${escapeHtml(authEns)}</strong><br><span style="color:#fcd34d;">Currently Checked OUT to ${escapeHtml(outLog.Student_Name)} (#${outLog.Line_Number})</span>`;
+    stuPromptBox.style.display = 'none';
+    assignBox.style.display = 'none';
+    btnConfirm.disabled = false;
+    btnConfirm.style.opacity = '1';
+    btnConfirm.style.background = '#0284c7';
+    btnConfirm.textContent = `📥 Confirm Check-In (${section} #${caseId})`;
+
+    AppState.pendingTx = {
+      mode: 'CHECK_IN', section, caseId: String(caseId), instEnsemble: authEns, initialNote,
+      student: { Line_Number: Number(outLog.Line_Number), Student_Name: outLog.Student_Name, Ensemble: authEns, Section: section, Assigned_Case_ID: String(caseId) }
+    };
+    txModal.classList.add('open');
+    return;
+  }
+
+  heroSub.innerHTML = `Ensemble: <strong>${escapeHtml(authEns)}</strong> • Status: <span style="color:#6ee7b7;">IN STORAGE</span>`;
+  stuPromptBox.style.display = 'block';
+  txEnsembleSelect.value = authEns === 'Orchestra' ? 'Orchestra' : 'Band';
+
+  const assignedStudents = AppState.rosterList.filter((s) => !isRepairShopEntity(s) && isInstrumentAssignedToStudent(s, section, caseId));
+  quickChips.innerHTML = assignedStudents.map((s) =>
+    `<button type="button" class="btn-secondary tx-stu-chip" data-comp="${escapeHtml(s.composite_id)}" style="font-size:0.76rem; padding:6px 10px; border:1px solid #38bdf8;">
+      👤 Assigned: ${escapeHtml(s.Student_Name)} (${s.Ensemble} #${s.Line_Number})
+    </button>`
+  ).join('');
+
+  quickChips.querySelectorAll('.tx-stu-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const stu = AppState.rosterList.find((r) => r.composite_id === chip.dataset.comp);
+      if (stu) setTxModalSelectedStudent(stu);
+    });
+  });
+
+  AppState.pendingTx = { mode: 'CHECK_OUT', section, caseId: String(caseId), instEnsemble: authEns, initialNote, student: null };
+
+  if (AppState.activeStudent) {
+    let chosen = AppState.activeStudent;
+    if (AppState.matchedCandidates.length > 1) {
+      const exactCand = AppState.matchedCandidates.find((c) => isInstrumentAssignedToStudent(c, section, caseId));
+      const ensCand = AppState.matchedCandidates.find((c) => c.Ensemble.toUpperCase() === authEns.toUpperCase());
+      if (exactCand) chosen = exactCand;
+      else if (ensCand) chosen = ensCand;
+    }
+    setTxModalSelectedStudent(chosen);
+  } else {
+    txLineInput.value = '';
+    setTxModalSelectedStudent(null);
+  }
+  txModal.classList.add('open');
+}
+
+function setTxModalSelectedStudent(student) {
+  if (!AppState.pendingTx) return;
+  const { section, caseId } = AppState.pendingTx;
+  const card = document.getElementById('txSelectedStudentCard');
+  const errorBox = document.getElementById('txErrorBox');
+  const assignBox = document.getElementById('txAssignBox');
+  const chkAssign = document.getElementById('chkTxAssign');
+  const lblAssign = document.getElementById('lblTxAssign');
+  const assignModeRow = document.getElementById('txAssignModeRow');
+  const btnConfirm = document.getElementById('btnTxConfirm');
+  const txLineInput = document.getElementById('txLineInput');
+  const txEnsembleSelect = document.getElementById('txEnsembleSelect');
+
+  AppState.pendingTx.student = student;
+  if (!student) {
+    card.style.display = 'none';
+    errorBox.style.display = 'none';
+    assignBox.style.display = 'none';
+    btnConfirm.disabled = true;
+    btnConfirm.style.opacity = '0.5';
+    btnConfirm.textContent = 'Enter Line # or Scan Student ID Above';
+    return;
+  }
+
+  txLineInput.value = student.Line_Number;
+  if (student.Ensemble === 'Band' || student.Ensemble === 'Orchestra') txEnsembleSelect.value = student.Ensemble;
+
+  card.style.display = 'block';
+  card.innerHTML = `<strong>👤 ${escapeHtml(student.Student_Name)}</strong> (${escapeHtml(student.Ensemble)} #${student.Line_Number})<br><span style="font-size:0.76rem; color:#94a3b8;">Roster Assignment: ${escapeHtml(formatAssignedPairsText(student))}</span>`;
+
+  const compat = checkEnsembleCompatibility(student, section, caseId);
+  if (!compat.allowed) {
+    playTone('WARNING');
+    errorBox.style.display = 'block';
+    errorBox.innerHTML = `⛔ <strong>ENSEMBLE MISMATCH:</strong> ${escapeHtml(student.Student_Name)} is in <strong>${escapeHtml(compat.stuEnsemble)}</strong>, but ${escapeHtml(section)} #${escapeHtml(caseId)} belongs to <strong>${escapeHtml(compat.instEnsemble)}</strong>.<br>Checkout blocked unless student is marked "Both" or "All" on Roster.`;
+    assignBox.style.display = 'none';
+    btnConfirm.disabled = true;
+    btnConfirm.style.opacity = '0.4';
+    btnConfirm.textContent = '⛔ Ensemble Mismatch — Blocked';
+    return;
+  }
+
+  errorBox.style.display = 'none';
+  btnConfirm.disabled = false;
+  btnConfirm.style.opacity = '1';
+  btnConfirm.style.background = '#7c3aed';
+  btnConfirm.textContent = `📤 Confirm Check-Out to ${student.Student_Name}`;
+
+  if (!isRepairShopEntity(student) && !isInstrumentAssignedToStudent(student, section, caseId)) {
+    assignBox.style.display = 'block';
+    const hasExisting = getStudentAssignedPairs(student).length > 0;
+    chkAssign.checked = !hasExisting;
+    lblAssign.textContent = `📌 Also assign ${section} #${caseId} to ${student.Student_Name}?`;
+    assignModeRow.style.display = hasExisting ? 'block' : 'none';
+  } else {
+    assignBox.style.display = 'none';
+    chkAssign.checked = false;
+  }
+}
+
+function handleTxModalLineLookup() {
+  if (!AppState.pendingTx) return;
+  const lineStr = document.getElementById('txLineInput').value.trim();
+  const ensVal = document.getElementById('txEnsembleSelect').value;
+  if (!lineStr) return setTxModalSelectedStudent(null);
+
+  const lineNum = parseInt(lineStr, 10);
+  if (ensVal === 'Repair' || lineNum === 900) {
+    const shop = AppState.rosterList.find((s) => isRepairShopEntity(s));
+    if (shop) setTxModalSelectedStudent(shop);
+    return;
+  }
+
+  const found = AppState.rosterList.find(
+    (s) => Number(s.Line_Number) === lineNum && (s.Ensemble.toUpperCase() === ensVal.toUpperCase() || s.Ensemble.toUpperCase() === 'BOTH' || s.Ensemble.toUpperCase() === 'ALL')
+  );
+  if (found) setTxModalSelectedStudent(found);
+  else {
+    setTxModalSelectedStudent(null);
+    const card = document.getElementById('txSelectedStudentCard');
+    card.style.display = 'block';
+    card.innerHTML = `<span style="color:#fcd34d; font-weight:800;">⚠️ Line #${lineNum} (${ensVal}) is not on the Roster.</span>
+      <div style="margin-top:6px;"><button id="btnTxAddUnlisted" type="button" class="btn-primary" style="font-size:0.76rem; padding:6px 10px;">➕ Add New Student to Line #${lineNum}</button></div>`;
+    document.getElementById('btnTxAddUnlisted').addEventListener('click', () => {
+      openUnlistedLineModal(lineNum, (newStu) => setTxModalSelectedStudent(newStu));
+    });
+  }
+}
+
+async function executeConfirmedTransaction() {
+  if (!AppState.pendingTx || !AppState.pendingTx.student) return;
+  const { mode, section, caseId, instEnsemble, initialNote, student } = AppState.pendingTx;
+  document.getElementById('txModal').classList.remove('open');
+
+  if (isRepairShopEntity(student)) {
+    AppState.activeStudent = student;
+    AppState.actionMode = 'CHECK_OUT';
+    applyModeUI('CHECK_OUT');
+    openRepairDetailsModal(section, caseId, initialNote);
+    return;
+  }
+
+  let statusFlag = 'DIRECT_MATCH';
+  const wasAssigned = isInstrumentAssignedToStudent(student, section, caseId);
+  const chkAssign = document.getElementById('chkTxAssign');
+  if (mode === 'CHECK_OUT' && !wasAssigned && chkAssign && chkAssign.checked) {
+    const modeRadio = document.querySelector('input[name="txAssignMode"]:checked');
+    await applyStudentInstrumentAssignment(student, section, caseId, modeRadio ? modeRadio.value : 'APPEND');
+    statusFlag = 'DIRECT_MATCH';
+  } else if (!wasAssigned) {
+    statusFlag = getStudentAssignedPairs(student).length === 0 ? 'UNASSIGNED' : 'SWAP';
+  }
+
+  const authoritativeEnsemble = getAuthoritativeInstrumentEnsemble(section, caseId) || instEnsemble || student.Ensemble;
+  const logEntry = {
+    Request_Type: 'SCAN_LOG', Auth_PIN: AppState.userPin, Timestamp: getLocalTimestamp(),
+    Ensemble: authoritativeEnsemble, Line_Number: Number(student.Line_Number), Student_Name: student.Student_Name,
+    Section: section, Instrument: section, Case_ID: String(caseId), Action: mode,
+    Status_Flag: statusFlag, Volunteer_Note: initialNote, Scanned_By: `${AppState.userName} (${AppState.userRole})`
+  };
+
+  AppState.scanHistory.push(logEntry);
+  const localId = await window.TrackerDB.enqueueItem(logEntry);
+  AppState.lastTransaction = { ...logEntry, local_id: localId };
+  AppState.postTransactionReset = true;
+  AppState.pendingTx = null;
+
+  playTone('MATCH');
+  vibrateDevice('MATCH');
+
+  UI.resultBanner.className = `result-banner visible ${statusFlag === 'DIRECT_MATCH' ? 'match' : 'swap'}`;
+  UI.resultIcon.textContent = '✓';
+  UI.resultTitle.textContent = mode === 'CHECK_IN' ? 'CHECKED IN' : 'CHECKED OUT';
+  UI.resultSubtitle.textContent = `${section} #${caseId} (${authoritativeEnsemble}) • ${student.Student_Name}`;
+
+  setTimeout(() => { if (AppState.postTransactionReset) resetScannerState(); }, 1200);
+  updateSyncBadge();
+  flushOutboundQueue();
+}
+
+async function applyStudentInstrumentAssignment(student, section, caseId, assignMode = 'APPEND') {
+  const existingPairs = getStudentAssignedPairs(student);
+  const updatedPairs = (assignMode === 'APPEND' && existingPairs.length > 0)
+    ? [...existingPairs, { section, caseId: String(caseId) }]
+    : [{ section, caseId: String(caseId) }];
+
+  const newSecStr = updatedPairs.map((p) => p.section).join(', ');
+  const newCaseStr = updatedPairs.map((p) => p.caseId).join(', ');
+  student.Section = newSecStr;
+  student.Instrument = newSecStr;
+  student.Assigned_Case_ID = newCaseStr;
+
+  const instKey = `${section.toUpperCase()}|${String(caseId).toUpperCase()}`;
+  const authEns = getAuthoritativeInstrumentEnsemble(section, caseId) || student.Ensemble;
+  const existingInst = AppState.instrumentsList.find((i) => i.inst_key === instKey);
+  if (existingInst) {
+    existingInst.Assigned_Student = student.Student_Name;
+    existingInst.Assigned_Line = student.Line_Number;
+    existingInst.in_roster = true;
+  } else {
+    AppState.instrumentsList.push({
+      inst_key: instKey, Ensemble: authEns, Section: section, Instrument: section,
+      Case_ID: String(caseId), Brand: '', Model: '', Serial: '', Notes: '',
+      Assigned_Student: student.Student_Name, Assigned_Line: student.Line_Number, in_master_tab: false, in_roster: true
+    });
+  }
+
+  await window.TrackerDB.enqueueItem({
+    Request_Type: 'ASSIGN_INSTRUMENT', Auth_PIN: AppState.userPin,
+    Ensemble: student.Ensemble, Line_Number: Number(student.Line_Number), Section: newSecStr, Case_ID: newCaseStr
+  });
 }
 
 function openRepairDetailsModal(section, caseId, initialNote) {
@@ -803,7 +1172,7 @@ function openRepairDetailsModal(section, caseId, initialNote) {
   const isReturning = AppState.actionMode === 'CHECK_IN';
   UI.repairModalTitle.textContent = isReturning ? '🔧 Check Instrument BACK IN from Repair' : '🔧 Send Instrument OUT for Repair';
   UI.repairInstrumentLabel.textContent = `${section} #${caseId}`;
-  UI.repairShopInput.value = AppState.activeStudent && AppState.activeStudent.Student_Name
+  UI.repairShopInput.value = AppState.activeStudent && isRepairShopEntity(AppState.activeStudent)
     ? `${AppState.activeStudent.Student_Name} (#${AppState.activeStudent.Line_Number})` : 'Repair Shop (#900)';
   UI.repairDetailsLabel.textContent = isReturning ? 'Work Performed / Repair Summary' : 'Issue / Reason for Repair';
   UI.repairDetailsInput.value = '';
@@ -811,7 +1180,6 @@ function openRepairDetailsModal(section, caseId, initialNote) {
   UI.repairInvoiceNumInput.value = '';
   UI.repairReturnFields.style.display = isReturning ? 'block' : 'none';
   UI.adminInvoiceBox.style.display = isReturning && AppState.userRole === 'ADMIN' ? 'block' : 'none';
-
   playTone('MATCH');
   UI.repairModal.classList.add('open');
 }
@@ -863,9 +1231,8 @@ async function submitRepairTransaction() {
   const invNum = isReturning ? UI.repairInvoiceNumInput.value.trim() : '';
 
   UI.repairModal.classList.remove('open');
-
   const repairPayload = {
-    Request_Type: 'REPAIR_LOG', Auth_PIN: AppState.userPin, Timestamp: new Date().toISOString(),
+    Request_Type: 'REPAIR_LOG', Auth_PIN: AppState.userPin, Timestamp: getLocalTimestamp(),
     Line_Number: AppState.activeStudent ? Number(AppState.activeStudent.Line_Number) : 900,
     Repair_Action: repairAction, Section: section, Instrument: section, Case_ID: String(caseId), Shop_Name: shopName,
     Repair_Details: details || (isReturning ? 'Returned from shop' : 'Sent for repair'),
@@ -885,7 +1252,6 @@ async function submitRepairTransaction() {
   AppState.lastTransaction = { ...repairPayload, local_id: localId };
   AppState.postTransactionReset = true;
 
-  if (UI.btnAssignInstrument) UI.btnAssignInstrument.style.display = 'none';
   UI.resultBanner.className = 'result-banner visible match';
   UI.resultIcon.textContent = '🔧';
   UI.resultTitle.textContent = isReturning ? 'RETURNED FROM REPAIR' : 'SENT TO REPAIR';
@@ -897,129 +1263,19 @@ async function submitRepairTransaction() {
 }
 
 function openManualCaseModal() {
-  if (!AppState.activeStudent) return;
   const stu = AppState.activeStudent;
-  const stuSec = getSec(stu);
+  const pairs = getStudentAssignedPairs(stu);
   const isRepair = isRepairShopEntity(stu);
-  if (!isRepair && stuSec && stu.Assigned_Case_ID) {
+  if (!isRepair && pairs.length > 0) {
     UI.btnQuickConfirmAssigned.style.display = 'block';
-    UI.btnQuickConfirmAssigned.textContent = `✓ Log Assigned: ${stuSec} #${stu.Assigned_Case_ID} (Flag Bad QR)`;
+    UI.btnQuickConfirmAssigned.textContent = `✓ Select Assigned: ${pairs[0].section} #${pairs[0].caseId} (Flag Bad QR)`;
   } else {
     UI.btnQuickConfirmAssigned.style.display = 'none';
   }
-  UI.manualSectionInput.value = !isRepair && stuSec !== 'Unassigned' ? stuSec : '';
-  UI.manualCaseNumInput.value = !isRepair ? stu.Assigned_Case_ID || '' : '';
+  UI.manualSectionInput.value = !isRepair && pairs.length > 0 ? pairs[0].section : '';
+  UI.manualCaseNumInput.value = !isRepair && pairs.length > 0 ? pairs[0].caseId : '';
   UI.chkFlagBadQr.checked = true;
   UI.manualCaseModal.classList.add('open');
-}
-
-async function evaluateAndLogInstrumentScan(scannedSection, scannedCaseId, initialNote = '') {
-  if (AppState.matchedCandidates.length > 1) {
-    const exact = AppState.matchedCandidates.find((c) => getSec(c).toUpperCase() === scannedSection.toUpperCase() && String(c.Assigned_Case_ID).toUpperCase() === String(scannedCaseId).toUpperCase());
-    const secMatch = AppState.matchedCandidates.find((c) => getSec(c).toUpperCase() === scannedSection.toUpperCase());
-    if (exact) AppState.activeStudent = exact;
-    else if (secMatch) AppState.activeStudent = secMatch;
-  }
-
-  const student = AppState.activeStudent;
-  const expectedSection = getSec(student).toUpperCase();
-  const expectedCase = String(student.Assigned_Case_ID || '').trim().toUpperCase();
-
-  let statusFlag = 'DIRECT_MATCH';
-  if (!expectedCase || !expectedSection) statusFlag = 'UNASSIGNED';
-  else if (scannedSection.toUpperCase() !== expectedSection || String(scannedCaseId).toUpperCase() !== expectedCase) statusFlag = 'SWAP';
-
-  if (statusFlag === 'DIRECT_MATCH') { playTone('MATCH'); vibrateDevice('MATCH'); }
-  else { playTone('WARNING'); vibrateDevice('WARNING'); }
-
-  const logEntry = {
-    Request_Type: 'SCAN_LOG', Auth_PIN: AppState.userPin, Timestamp: new Date().toISOString(),
-    Ensemble: student.Ensemble, Line_Number: Number(student.Line_Number), Student_Name: student.Student_Name,
-    Section: scannedSection, Instrument: scannedSection, Case_ID: String(scannedCaseId), Action: AppState.actionMode,
-    Status_Flag: statusFlag, Volunteer_Note: initialNote, Scanned_By: `${AppState.userName} (${AppState.userRole})`
-  };
-
-  AppState.scanHistory.push(logEntry);
-  const localId = await window.TrackerDB.enqueueItem(logEntry);
-  AppState.lastTransaction = { ...logEntry, local_id: localId };
-  AppState.postTransactionReset = true;
-
-  UI.resultBanner.className = `result-banner visible ${statusFlag === 'DIRECT_MATCH' ? 'match' : 'swap'}`;
-  UI.resultIcon.textContent = statusFlag === 'DIRECT_MATCH' ? '✓' : '⚠️';
-  UI.resultTitle.textContent = statusFlag === 'DIRECT_MATCH'
-    ? (AppState.actionMode === 'CHECK_IN' ? 'CHECKED IN' : 'CHECKED OUT') : `${statusFlag}: ${scannedSection} #${scannedCaseId}`;
-  const noteSuffix = initialNote.includes('[NEEDS QR TAG]') ? ' • 🔧 Flagged for New QR' : '';
-  UI.resultSubtitle.textContent = statusFlag === 'DIRECT_MATCH'
-    ? `${student.Student_Name} • ${scannedSection} #${scannedCaseId}${noteSuffix}`
-    : `${student.Student_Name} (Currently Assigned: ${expectedSection ? getSec(student) + ' #' + student.Assigned_Case_ID : 'None'})${noteSuffix}`;
-
-  // Show "📌 Assign to Student?" button whenever an unassigned or different instrument is scanned!
-  if (UI.btnAssignInstrument) {
-    if (statusFlag !== 'DIRECT_MATCH' && student.Ensemble !== 'Unlisted') {
-      AppState.pendingAssignOffer = { student, section: scannedSection, caseId: String(scannedCaseId) };
-      UI.btnAssignInstrument.textContent = `📌 Assign ${scannedSection} #${scannedCaseId} to ${student.Student_Name}?`;
-      UI.btnAssignInstrument.style.display = 'inline-block';
-    } else {
-      UI.btnAssignInstrument.style.display = 'none';
-      AppState.pendingAssignOffer = null;
-    }
-  }
-
-  if (statusFlag === 'DIRECT_MATCH') {
-    setTimeout(() => { if (AppState.postTransactionReset) resetScannerState(); }, 1200);
-  }
-  updateSyncBadge();
-  flushOutboundQueue();
-}
-
-/**
- * Permanently assigns the scanned instrument & case # to the active student in memory,
- * IndexedDB, and the Google Sheet Roster tab!
- */
-async function handleAssignInstrumentClick() {
-  if (!AppState.pendingAssignOffer) return;
-  const { student, section, caseId } = AppState.pendingAssignOffer;
-  AppState.pendingAssignOffer = null;
-  if (UI.btnAssignInstrument) UI.btnAssignInstrument.style.display = 'none';
-
-  student.Section = section;
-  student.Instrument = section;
-  student.Assigned_Case_ID = caseId;
-
-  const instKey = `${section.toUpperCase()}|${caseId.toUpperCase()}`;
-  let existingInst = AppState.instrumentsList.find((i) => i.inst_key === instKey);
-  if (existingInst) {
-    existingInst.Assigned_Student = student.Student_Name;
-    existingInst.Assigned_Line = student.Line_Number;
-    existingInst.in_roster = true;
-  } else {
-    existingInst = {
-      inst_key: instKey, Ensemble: student.Ensemble, Section: section, Instrument: section,
-      Case_ID: caseId, Brand: '', Model: '', Serial: '', Notes: '',
-      Assigned_Student: student.Student_Name, Assigned_Line: student.Line_Number,
-      in_master_tab: false, in_roster: true
-    };
-    AppState.instrumentsList.push(existingInst);
-  }
-
-  await window.TrackerDB.enqueueItem({
-    Request_Type: 'ASSIGN_INSTRUMENT',
-    Auth_PIN: AppState.userPin,
-    Ensemble: student.Ensemble,
-    Line_Number: Number(student.Line_Number),
-    Section: section,
-    Case_ID: caseId
-  });
-
-  playTone('MATCH');
-  UI.resultBanner.className = 'result-banner visible match';
-  UI.resultIcon.textContent = '📌';
-  UI.resultTitle.textContent = 'ASSIGNED & LOGGED';
-  UI.resultSubtitle.textContent = `${section} #${caseId} is now assigned to ${student.Student_Name}`;
-
-  setTimeout(() => { if (AppState.postTransactionReset) resetScannerState(); }, 1100);
-  updateSyncBadge();
-  flushOutboundQueue();
 }
 
 function formatInstSpecs(inst) {
@@ -1031,30 +1287,27 @@ function formatInstSpecs(inst) {
   return parts.join(' • ');
 }
 
-/**
- * Resolves the human-readable instrument name for any scan log row (even if Section was blank in older logs).
- */
 function resolveLogInstrumentName(log, studentFallback) {
   const direct = getSec(log);
   if (direct && direct !== 'undefined') return direct;
-  if (studentFallback && getSec(studentFallback)) return getSec(studentFallback);
-  const byStu = AppState.rosterList.find(
-    (s) => String(s.Ensemble || '').toUpperCase() === String(log.Ensemble || '').toUpperCase() && Number(s.Line_Number) === Number(log.Line_Number)
-  );
-  if (byStu && getSec(byStu)) return getSec(byStu);
+  if (studentFallback) {
+    const pairs = getStudentAssignedPairs(studentFallback);
+    const matchPair = pairs.find((p) => String(p.caseId) === String(log.Case_ID));
+    if (matchPair) return matchPair.section;
+    if (pairs.length > 0) return pairs[0].section;
+  }
+  const byStu = AppState.rosterList.find((s) => Number(s.Line_Number) === Number(log.Line_Number) && String(s.Student_Name || '').toUpperCase() === String(log.Student_Name || '').toUpperCase());
+  if (byStu) {
+    const pairs = getStudentAssignedPairs(byStu);
+    if (pairs.length > 0) return pairs[0].section;
+  }
   const byCase = AppState.instrumentsList.find((i) => String(i.Case_ID) === String(log.Case_ID));
-  if (byCase && getSec(byCase)) return getSec(byCase);
-  return 'Instrument';
+  return byCase && getSec(byCase) ? getSec(byCase) : 'Instrument';
 }
 
-/**
- * Parses natural-language status and date queries like:
- * "checked out", "check out", "checked in", "checked out today", "checked out 10/23", "2026-10-23"
- */
 function parseSearchStatusAndDate(q) {
-  let statusFilter = null; // "OUT" | "IN" | null
+  let statusFilter = null;
   let remaining = q;
-
   if (/\b(checked\s*out|check\s*out)\b/.test(remaining) || /^out(\b|\s)/.test(remaining)) {
     statusFilter = 'OUT';
     remaining = remaining.replace(/\b(checked\s*out|check\s*out|out)\b/g, '').trim();
@@ -1062,23 +1315,15 @@ function parseSearchStatusAndDate(q) {
     statusFilter = 'IN';
     remaining = remaining.replace(/\b(checked\s*in|check\s*in|in\s*storage)\b/g, '').trim();
   }
-
   remaining = remaining.replace(/^(on|for|from)\s+/i, '').trim();
 
   let targetDate = null;
-  if (remaining === 'today') {
-    targetDate = new Date();
-    remaining = '';
-  } else if (remaining === 'yesterday') {
-    targetDate = new Date();
-    targetDate.setDate(targetDate.getDate() - 1);
-    remaining = '';
-  } else if (remaining) {
-    // Match M/D, M/D/YYYY, YYYY-MM-DD, or Month Day (e.g. "10/23", "10/23/2026", "oct 23")
+  if (remaining === 'today') { targetDate = new Date(); remaining = ''; }
+  else if (remaining === 'yesterday') { targetDate = new Date(); targetDate.setDate(targetDate.getDate() - 1); remaining = ''; }
+  else if (remaining) {
     const mdMatch = remaining.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
     if (mdMatch) {
-      const m = parseInt(mdMatch[1], 10) - 1;
-      const d = parseInt(mdMatch[2], 10);
+      const m = parseInt(mdMatch[1], 10) - 1, d = parseInt(mdMatch[2], 10);
       let y = mdMatch[3] ? parseInt(mdMatch[3], 10) : new Date().getFullYear();
       if (y < 100) y += 2000;
       targetDate = new Date(y, m, d);
@@ -1091,19 +1336,13 @@ function parseSearchStatusAndDate(q) {
       }
     }
   }
-
   return { statusFilter, targetDate, textRemainder: remaining };
 }
 
-function isSameCalendarDay(isoStr, targetDate) {
-  if (!isoStr || !targetDate) return false;
-  const d = new Date(isoStr);
-  if (isNaN(d.getTime())) return false;
-  return (
-    d.getFullYear() === targetDate.getFullYear() &&
-    d.getMonth() === targetDate.getMonth() &&
-    d.getDate() === targetDate.getDate()
-  );
+function isSameCalendarDay(tsStr, targetDate) {
+  if (!tsStr || !targetDate) return false;
+  const d = new Date(tsStr);
+  return !isNaN(d.getTime()) && d.getFullYear() === targetDate.getFullYear() && d.getMonth() === targetDate.getMonth() && d.getDate() === targetDate.getDate();
 }
 
 function runStatusSearch(rawQuery) {
@@ -1117,11 +1356,11 @@ function runStatusSearch(rawQuery) {
 
   const { statusFilter, targetDate, textRemainder } = parseSearchStatusAndDate(q);
   const isPureStatusOrDateQuery = (statusFilter !== null || targetDate !== null) && textRemainder === '';
-
   const cardsHtml = [];
 
   for (const inst of AppState.instrumentsList) {
     const instSec = getSec(inst);
+    const authEns = getAuthoritativeInstrumentEnsemble(instSec, inst.Case_ID) || inst.Ensemble;
     const instLogs = AppState.scanHistory.filter(
       (l) => resolveLogInstrumentName(l, null).toUpperCase() === instSec.toUpperCase() && String(l.Case_ID || '').toUpperCase() === String(inst.Case_ID).toUpperCase()
     );
@@ -1132,84 +1371,51 @@ function runStatusSearch(rawQuery) {
 
     let includeInst = false;
     if (isPureStatusOrDateQuery) {
-      if (targetDate) {
-        includeInst = instLogs.some((l) => {
-          const dayOk = isSameCalendarDay(l.Timestamp, targetDate);
-          const actOk = !statusFilter || (statusFilter === 'OUT' ? l.Action === 'CHECK_OUT' : l.Action === 'CHECK_IN');
-          return dayOk && actOk;
-        });
-      } else if (statusFilter === 'OUT') {
-        includeInst = Boolean(isOut);
-      } else if (statusFilter === 'IN') {
-        includeInst = !isOut;
-      }
+      if (targetDate) includeInst = instLogs.some((l) => isSameCalendarDay(l.Timestamp, targetDate) && (!statusFilter || (statusFilter === 'OUT' ? l.Action === 'CHECK_OUT' : l.Action === 'CHECK_IN')));
+      else if (statusFilter === 'OUT') includeInst = Boolean(isOut);
+      else if (statusFilter === 'IN') includeInst = !isOut;
     } else {
       const searchQ = textRemainder || q;
-      const combo1 = `${instSec} ${inst.Case_ID}`.toLowerCase();
-      const combo2 = `${instSec} #${inst.Case_ID}`.toLowerCase();
-      const specs = `${inst.Brand || ''} ${inst.Model || ''} ${inst.Serial || ''} ${inst.Assigned_Student || ''}`.toLowerCase();
-      const lastNote = lastLog ? String(lastLog.Volunteer_Note || '').toLowerCase() : '';
-      const lastFlag = lastLog ? String(lastLog.Status_Flag || '').toLowerCase() : '';
-      const textMatched = combo1.includes(searchQ) || combo2.includes(searchQ) || specs.includes(searchQ) || lastNote.includes(searchQ) || lastFlag.includes(searchQ);
-      const statusOk = !statusFilter || (statusFilter === 'OUT' ? isOut : !isOut);
-      includeInst = textMatched && statusOk;
+      const hay = `${instSec} ${inst.Case_ID} ${instSec} #${inst.Case_ID} ${inst.Brand || ''} ${inst.Model || ''} ${inst.Serial || ''} ${inst.Assigned_Student || ''} ${authEns} ${lastLog ? lastLog.Volunteer_Note : ''} ${lastLog ? lastLog.Status_Flag : ''}`.toLowerCase();
+      includeInst = hay.includes(searchQ) && (!statusFilter || (statusFilter === 'OUT' ? isOut : !isOut));
     }
-
     if (!includeInst) continue;
 
-    let badgeClass = inRepair ? 'badge-repair' : isOut ? 'badge-out' : 'badge-in';
-    let badgeLabel = inRepair ? '🔧 IN REPAIR' : isOut ? 'CHECKED OUT' : 'IN STORAGE';
-
+    const badgeClass = inRepair ? 'badge-repair' : isOut ? 'badge-out' : 'badge-in';
+    const badgeLabel = inRepair ? '🔧 IN REPAIR' : isOut ? 'CHECKED OUT' : 'IN STORAGE';
     const specsLine = formatInstSpecs(inst);
-    let statusDetail = `Roster Assignment: <strong>${inst.Assigned_Student}</strong> (${inst.Ensemble} #${inst.Assigned_Line || '—'})`;
+    let statusDetail = `Ensemble: <strong>${escapeHtml(authEns)}</strong> • Roster Assignment: <strong>${escapeHtml(inst.Assigned_Student)}</strong> (#${inst.Assigned_Line || '—'})`;
     if (specsLine) statusDetail += `<br>Specs: <strong>${escapeHtml(specsLine)}</strong>`;
     if (lastLog) {
-      statusDetail += `<br>Last Action: <strong>${inRepair ? 'Sent to Repair' : lastLog.Action === 'CHECK_OUT' ? 'Checked OUT' : 'Checked IN'}</strong> — ${lastLog.Student_Name} on ${formatShortDate(lastLog.Timestamp)}${lastLog.Scanned_By ? ' (by ' + lastLog.Scanned_By + ')' : ''}`;
+      statusDetail += `<br>Last Action: <strong>${inRepair ? 'Sent to Repair' : lastLog.Action === 'CHECK_OUT' ? 'Checked OUT' : 'Checked IN'}</strong> — ${escapeHtml(lastLog.Student_Name)} on ${formatShortDate(lastLog.Timestamp)}${lastLog.Scanned_By ? ' (by ' + escapeHtml(lastLog.Scanned_By) + ')' : ''}`;
       if (lastLog.Volunteer_Note) statusDetail += `<br>Note: <em>${escapeHtml(lastLog.Volunteer_Note)}</em>`;
       if (needsQr) statusDetail += `<br><span style="color:#fcd34d; font-weight:800;">🔧 FLAGGED: Needs Replacement QR Tag</span>`;
-    } else {
-      statusDetail += `<br>No check-in/out scans recorded yet.`;
-    }
+    } else statusDetail += `<br>No check-in/out scans recorded yet.`;
 
-    cardsHtml.push(`<div class="result-card"><div class="result-card-header"><strong style="font-size:1.05rem; color:#38bdf8;">🎺 ${instSec} #${inst.Case_ID}</strong><span class="${badgeClass}">${badgeLabel}</span></div><div style="font-size:0.84rem; color:#cbd5e1; line-height:1.4;">${statusDetail}</div></div>`);
+    cardsHtml.push(`<div class="result-card"><div class="result-card-header"><strong style="font-size:1.05rem; color:#38bdf8;">🎺 ${escapeHtml(instSec)} #${escapeHtml(inst.Case_ID)}</strong><span class="${badgeClass}">${badgeLabel}</span></div><div style="font-size:0.84rem; color:#cbd5e1; line-height:1.4;">${statusDetail}</div></div>`);
   }
 
   for (const stu of AppState.rosterList) {
     if (isRepairShopEntity(stu)) continue;
-    const stuSec = getSec(stu);
-    const stuLogs = AppState.scanHistory.filter(
-      (l) => String(l.Ensemble || '').toUpperCase() === stu.Ensemble.toUpperCase() && Number(l.Line_Number) === Number(stu.Line_Number)
-    );
+    const stuLogs = AppState.scanHistory.filter((l) => Number(l.Line_Number) === Number(stu.Line_Number) && String(l.Student_Name || '').toUpperCase() === stu.Student_Name.toUpperCase());
     const lastLog = stuLogs.length > 0 ? stuLogs[stuLogs.length - 1] : null;
     const currentlyOut = lastLog && lastLog.Action === 'CHECK_OUT';
 
     let includeStu = false;
     if (isPureStatusOrDateQuery) {
-      if (targetDate) {
-        includeStu = stuLogs.some((l) => {
-          const dayOk = isSameCalendarDay(l.Timestamp, targetDate);
-          const actOk = !statusFilter || (statusFilter === 'OUT' ? l.Action === 'CHECK_OUT' : l.Action === 'CHECK_IN');
-          return dayOk && actOk;
-        });
-      } else if (statusFilter === 'OUT') {
-        includeStu = Boolean(currentlyOut);
-      } else if (statusFilter === 'IN') {
-        includeStu = !currentlyOut && stuLogs.length > 0;
-      }
+      if (targetDate) includeStu = stuLogs.some((l) => isSameCalendarDay(l.Timestamp, targetDate) && (!statusFilter || (statusFilter === 'OUT' ? l.Action === 'CHECK_OUT' : l.Action === 'CHECK_IN')));
+      else if (statusFilter === 'OUT') includeStu = Boolean(currentlyOut);
+      else if (statusFilter === 'IN') includeStu = !currentlyOut && stuLogs.length > 0;
     } else {
       const searchQ = textRemainder || q;
       const exactLine = /^\d+$/.test(searchQ) && Number(stu.Line_Number) === Number(searchQ);
-      const hay = `${stu.Student_Name} ${stu.Ensemble} ${stuSec} ${stu.Line_Number}`.toLowerCase();
-      const textMatched = exactLine || hay.includes(searchQ);
-      const statusOk = !statusFilter || (statusFilter === 'OUT' ? currentlyOut : !currentlyOut);
-      includeStu = textMatched && statusOk;
+      const hay = `${stu.Student_Name} ${stu.Ensemble} ${formatAssignedPairsText(stu)} ${stu.Line_Number}`.toLowerCase();
+      includeStu = (exactLine || hay.includes(searchQ)) && (!statusFilter || (statusFilter === 'OUT' ? currentlyOut : !currentlyOut));
     }
-
     if (!includeStu) continue;
 
     const lastOutLog = [...stuLogs].reverse().find((l) => l.Action === 'CHECK_OUT');
     const lastInLog = [...stuLogs].reverse().find((l) => l.Action === 'CHECK_IN');
-
     let historySummary = 'Nothing checked out yet this term.';
     if (currentlyOut) {
       const outInstName = resolveLogInstrumentName(lastLog, stu);
@@ -1217,61 +1423,48 @@ function runStatusSearch(rawQuery) {
     } else if (lastOutLog || lastInLog) {
       const refLog = lastOutLog || lastInLog;
       const refInstName = resolveLogInstrumentName(refLog, stu);
-      const refInst = `${escapeHtml(refInstName)} #${escapeHtml(refLog.Case_ID)}`;
-      historySummary = `Nothing currently checked out.<br>Last Instrument: <strong>${refInst}</strong><br>Out: ${lastOutLog ? formatShortDate(lastOutLog.Timestamp) : '—'} &nbsp;|&nbsp; In: ${lastInLog ? formatShortDate(lastInLog.Timestamp) : '—'}`;
+      historySummary = `Nothing currently checked out.<br>Last Instrument: <strong>${escapeHtml(refInstName)} #${escapeHtml(refLog.Case_ID)}</strong><br>Out: ${lastOutLog ? formatShortDate(lastOutLog.Timestamp) : '—'} &nbsp;|&nbsp; In: ${lastInLog ? formatShortDate(lastInLog.Timestamp) : '—'}`;
     }
 
-    const assignedLabel = stuSec && stu.Assigned_Case_ID ? `${stuSec} #${stu.Assigned_Case_ID}` : 'Unassigned';
-    cardsHtml.push(`<div class="result-card"><div class="result-card-header"><strong style="font-size:1.05rem;">👤 ${stu.Student_Name} (${stu.Ensemble} #${stu.Line_Number})</strong><span class="${currentlyOut ? 'badge-out' : 'badge-in'}">${currentlyOut ? 'HAS INSTRUMENT OUT' : 'ALL CHECKED IN'}</span></div><div style="font-size:0.84rem; color:#cbd5e1; line-height:1.4;">Assigned: <strong>${assignedLabel}</strong><br>${historySummary}</div></div>`);
+    cardsHtml.push(`<div class="result-card"><div class="result-card-header"><strong style="font-size:1.05rem;">👤 ${escapeHtml(stu.Student_Name)} (${escapeHtml(stu.Ensemble)} #${stu.Line_Number})</strong><span class="${currentlyOut ? 'badge-out' : 'badge-in'}">${currentlyOut ? 'HAS INSTRUMENT OUT' : 'ALL CHECKED IN'}</span></div><div style="font-size:0.84rem; color:#cbd5e1; line-height:1.4;">Assigned: <strong>${escapeHtml(formatAssignedPairsText(stu))}</strong><br>${historySummary}</div></div>`);
   }
 
   UI.searchResultsContainer.innerHTML = cardsHtml.length > 0 ? cardsHtml.join('') : `<div style="color:var(--text-muted); text-align:center; padding:20px;">No matching students or instruments found.</div>`;
 }
 
-function formatShortDate(isoStr) {
-  try { return new Date(isoStr).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
-  catch (_) { return isoStr; }
+function formatShortDate(tsStr) {
+  try {
+    const d = new Date(tsStr);
+    return isNaN(d.getTime()) ? tsStr : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  } catch (_) { return tsStr; }
 }
 
 function filterByCustomKeywords(items, rawQuery, isStudentMode) {
   const cleanQuery = String(rawQuery || '').trim();
   if (!cleanQuery) return items;
-
   const tokens = cleanQuery.split(/[,;\n]+/).map((t) => t.trim().toLowerCase().replace(/#/g, '')).filter(Boolean);
   if (tokens.length === 0) return items;
 
   const matchedResults = [];
   const seenKeys = new Set();
-
   for (const token of tokens) {
     const exactNumMatch = token.match(/^([a-z\s]+?)\s+(\d+[a-z]*)$/);
     for (const item of items) {
       const uniqueId = isStudentMode ? item.composite_id : item.inst_key;
       if (seenKeys.has(uniqueId)) continue;
       const itemSec = getSec(item);
-
       let isMatch = false;
       if (exactNumMatch) {
-        const textPart = exactNumMatch[1].trim();
-        const numPart = exactNumMatch[2].trim();
-        if (isStudentMode) {
-          const stuText = `${item.Ensemble} ${item.Student_Name} ${itemSec}`.toLowerCase();
-          isMatch = stuText.includes(textPart) && (String(item.Line_Number).toLowerCase() === numPart || String(item.Assigned_Case_ID).toLowerCase() === numPart);
-        } else {
-          const instText = `${itemSec} ${item.Ensemble} ${item.Brand || ''}`.toLowerCase();
-          isMatch = instText.includes(textPart) && String(item.Case_ID).toLowerCase() === numPart;
-        }
+        const textPart = exactNumMatch[1].trim(), numPart = exactNumMatch[2].trim();
+        if (isStudentMode) isMatch = `${item.Ensemble} ${item.Student_Name} ${itemSec}`.toLowerCase().includes(textPart) && (String(item.Line_Number).toLowerCase() === numPart || String(item.Assigned_Case_ID).toLowerCase() === numPart);
+        else isMatch = `${itemSec} ${item.Ensemble} ${item.Brand || ''}`.toLowerCase().includes(textPart) && String(item.Case_ID).toLowerCase() === numPart;
       } else {
-        const haystack = isStudentMode
+        const hay = isStudentMode
           ? `${item.Student_Name} ${item.Ensemble} ${itemSec} ${item.Line_Number}`.toLowerCase()
           : `${itemSec} ${item.Case_ID} ${item.Ensemble} ${item.Assigned_Student || ''} ${item.Brand || ''} ${item.Model || ''} ${item.Serial || ''}`.toLowerCase();
-        isMatch = haystack.includes(token);
+        isMatch = hay.includes(token);
       }
-
-      if (isMatch) {
-        seenKeys.add(uniqueId);
-        matchedResults.push(item);
-      }
+      if (isMatch) { seenKeys.add(uniqueId); matchedResults.push(item); }
     }
   }
   return matchedResults;
@@ -1299,9 +1492,7 @@ function renderLabelSheets() {
   const ensFilter = UI.qrEnsembleSelect.value;
   const customQuery = UI.qrCustomQueryInput ? UI.qrCustomQueryInput.value : '';
   const schoolHeader = AppState.schoolHeader || 'MS MUSIC PROGRAM';
-  const returnLines = Array.isArray(AppState.returnLines) && AppState.returnLines.length > 0
-    ? AppState.returnLines
-    : ['If found, return to Music Room'];
+  const returnLines = Array.isArray(AppState.returnLines) && AppState.returnLines.length > 0 ? AppState.returnLines : ['If found, return to Music Room'];
   const logoPos = (AppState.logoPosition || 'LEFT').toUpperCase();
   const logoPx = Number(AppState.logoSizePx) || 48;
   const defaultQrPx = tpl === '97184' ? 132 : 104;
@@ -1310,15 +1501,13 @@ function renderLabelSheets() {
   const footerAlign = normalizeAlign(AppState.footerAlignment);
 
   localStorage.setItem(STORAGE_KEYS.AVERY_TEMPLATE, tpl);
-
   const labelItems = [];
   for (let s = 0; s < emptySkipCount; s++) labelItems.push({ emptySlot: true });
 
   if (mode === 'SINGLE_INST') {
     const sec = UI.qrInputPrimary.value.trim() || 'Trumpet';
     const num = UI.qrInputSecondary.value.trim() || '1';
-    const key = `${sec.toUpperCase()}|${num.toUpperCase()}`;
-    const existing = AppState.instrumentsList.find((i) => i.inst_key === key);
+    const existing = AppState.instrumentsList.find((i) => i.inst_key === `${sec.toUpperCase()}|${num.toUpperCase()}`);
     const manualSpecs = formatInstSpecs({
       Brand: (UI.qrInputBrand && UI.qrInputBrand.value.trim()) || (existing && existing.Brand) || '',
       Model: (UI.qrInputModel && UI.qrInputModel.value.trim()) || (existing && existing.Model) || '',
@@ -1326,8 +1515,7 @@ function renderLabelSheets() {
     });
     labelItems.push({ payload: `INST|${sec}|${num}`, mainTitle: `${sec.toUpperCase()} #${num}`, subTitle: manualSpecs });
   } else if (mode === 'SINGLE_STU') {
-    const name = UI.qrInputPrimary.value.trim() || 'Student';
-    const line = UI.qrInputSecondary.value.trim() || '1';
+    const name = UI.qrInputPrimary.value.trim() || 'Student', line = UI.qrInputSecondary.value.trim() || '1';
     const ens = ensFilter === 'ALL' ? 'Band' : ensFilter;
     labelItems.push({ payload: `STU|${ens}|${line}`, mainTitle: `${ens.toUpperCase()} #${line}`, subTitle: name });
   } else if (mode === 'REPAIR_SHOP_QR') {
@@ -1335,43 +1523,31 @@ function renderLabelSheets() {
   } else if (mode === 'FLAGGED_BAD_QR') {
     const flaggedSet = new Set();
     for (const log of AppState.scanHistory) {
-      const secName = resolveLogInstrumentName(log, null);
-      const key = `${secName.toUpperCase()}|${String(log.Case_ID || '').toUpperCase()}`;
+      const key = `${resolveLogInstrumentName(log, null).toUpperCase()}|${String(log.Case_ID || '').toUpperCase()}`;
       if (String(log.Volunteer_Note || '').includes('[NEEDS QR TAG]')) flaggedSet.add(key);
       else if (flaggedSet.has(key)) flaggedSet.delete(key);
     }
     for (const key of flaggedSet) {
       const [sec, num] = key.split('|');
       const matchedInst = AppState.instrumentsList.find((i) => i.inst_key === key);
-      labelItems.push({
-        payload: `INST|${matchedInst ? getSec(matchedInst) : sec}|${matchedInst ? matchedInst.Case_ID : num}`,
-        mainTitle: `${sec} #${num}`,
-        subTitle: formatInstSpecs(matchedInst)
-      });
+      labelItems.push({ payload: `INST|${matchedInst ? getSec(matchedInst) : sec}|${matchedInst ? matchedInst.Case_ID : num}`, mainTitle: `${sec} #${num}`, subTitle: formatInstSpecs(matchedInst) });
     }
   } else if (mode === 'BATCH_MASTER_INST' || mode === 'BATCH_ROSTER_INST') {
     const hasAnyMasterRows = AppState.instrumentsList.some((i) => i.in_master_tab);
     let list = AppState.instrumentsList.filter((i) => {
-      const ensOk = ensFilter === 'ALL' || !i.Ensemble || i.Ensemble.toUpperCase() === ensFilter.toUpperCase();
-      if (!ensOk) return false;
-      if (mode === 'BATCH_MASTER_INST') return hasAnyMasterRows ? i.in_master_tab : true;
-      return i.in_roster;
+      const authEns = getAuthoritativeInstrumentEnsemble(getSec(i), i.Case_ID) || i.Ensemble;
+      const ensOk = ensFilter === 'ALL' || !authEns || authEns.toUpperCase() === ensFilter.toUpperCase();
+      return ensOk && (mode === 'BATCH_MASTER_INST' ? (hasAnyMasterRows ? i.in_master_tab : true) : i.in_roster);
     });
     list = filterByCustomKeywords(list, customQuery, false);
     for (const inst of list) {
       const instSec = getSec(inst);
-      labelItems.push({
-        payload: `INST|${instSec}|${inst.Case_ID}`,
-        mainTitle: `${instSec.toUpperCase()} #${inst.Case_ID}`,
-        subTitle: formatInstSpecs(inst)
-      });
+      labelItems.push({ payload: `INST|${instSec}|${inst.Case_ID}`, mainTitle: `${instSec.toUpperCase()} #${inst.Case_ID}`, subTitle: formatInstSpecs(inst) });
     }
   } else if (mode === 'BATCH_STU') {
     let list = AppState.rosterList.filter((s) => !isRepairShopEntity(s) && (ensFilter === 'ALL' || s.Ensemble.toUpperCase() === ensFilter.toUpperCase()));
     list = filterByCustomKeywords(list, customQuery, true);
-    for (const stu of list) {
-      labelItems.push({ payload: `STU|${stu.Ensemble}|${stu.Line_Number}`, mainTitle: `${stu.Ensemble.toUpperCase()} #${stu.Line_Number}`, subTitle: stu.Student_Name });
-    }
+    for (const stu of list) labelItems.push({ payload: `STU|${stu.Ensemble}|${stu.Line_Number}`, mainTitle: `${stu.Ensemble.toUpperCase()} #${stu.Line_Number}`, subTitle: stu.Student_Name });
   } else if (mode === 'RETURN_ONLY') {
     for (let i = 0; i < labelsPerPage - emptySkipCount; i++) labelItems.push({ returnStickerOnly: true });
   }
@@ -1392,23 +1568,15 @@ function renderLabelSheets() {
     for (const item of pageSlice) {
       const cell = document.createElement('div');
       cell.className = 'avery-label-cell';
-      if (item.emptySlot) {
-        cell.style.borderColor = 'transparent';
-        pageEl.appendChild(cell);
-        continue;
-      }
+      if (item.emptySlot) { cell.style.borderColor = 'transparent'; pageEl.appendChild(cell); continue; }
 
       const inner = document.createElement('div');
       inner.className = 'tag-inner-card';
-
       const headerBand = document.createElement('div');
       headerBand.className = 'tag-header-band';
 
       if (AppState.schoolLogoDataUrl && logoPos !== 'QR_CENTER' && logoPos !== 'NONE') {
-        if (logoPos === 'TOP') headerBand.style.flexDirection = 'column';
-        else if (logoPos === 'RIGHT') headerBand.style.flexDirection = 'row-reverse';
-        else headerBand.style.flexDirection = 'row';
-
+        headerBand.style.flexDirection = logoPos === 'TOP' ? 'column' : logoPos === 'RIGHT' ? 'row-reverse' : 'row';
         const logoImg = document.createElement('img');
         logoImg.className = 'tag-logo-img';
         logoImg.src = AppState.schoolLogoDataUrl;
@@ -1437,7 +1605,6 @@ function renderLabelSheets() {
         const qrWrap = document.createElement('div');
         qrWrap.className = 'tag-qr-wrap';
         qrWrap.style.position = 'relative';
-
         const canvas = document.createElement('canvas');
         new QRious({ element: canvas, value: item.payload, size: qrPx, level: 'H' });
         qrWrap.appendChild(canvas);
@@ -1448,7 +1615,6 @@ function renderLabelSheets() {
           centerLogo.style.cssText = `position:absolute; height:${logoPx}px; max-height:${logoPx}px; width:auto; max-width:${Math.round(logoPx * 1.5)}px; object-fit:contain; background:#fff; padding:2px; border-radius:4px; border:1px solid #000;`;
           qrWrap.appendChild(centerLogo);
         }
-
         inner.appendChild(qrWrap);
 
         const footerBand = document.createElement('div');
@@ -1479,8 +1645,7 @@ function unlockAudio() {
 
 function playTone(type) {
   if (!AppState.audioCtx) return;
-  const ctx = AppState.audioCtx;
-  const now = ctx.currentTime;
+  const ctx = AppState.audioCtx, now = ctx.currentTime;
   if (type === 'MATCH') {
     const osc = ctx.createOscillator(), gain = ctx.createGain();
     osc.type = 'triangle';
@@ -1602,18 +1767,40 @@ function bindEvents() {
     if (btn) handleKeypad(btn.dataset.key);
   });
 
+  // Transaction Confirmation Modal Events
+  document.getElementById('txLineInput').addEventListener('input', handleTxModalLineLookup);
+  document.getElementById('txEnsembleSelect').addEventListener('change', handleTxModalLineLookup);
+  document.getElementById('btnTxConfirm').addEventListener('click', executeConfirmedTransaction);
+  document.getElementById('btnTxCancel').addEventListener('click', () => {
+    document.getElementById('txModal').classList.remove('open');
+    AppState.pendingTx = null;
+  });
+
+  // Unlisted Student Modal Events
+  const addUnlistedBtn = document.getElementById('btnAddUnlistedStu');
+  if (addUnlistedBtn) {
+    addUnlistedBtn.addEventListener('click', () => openUnlistedLineModal(parseInt(AppState.currentInput, 10) || 1, null));
+  }
+  document.getElementById('btnUnlistedTypo').addEventListener('click', () => {
+    document.getElementById('unlistedModal').classList.remove('open');
+    resetScannerState();
+  });
+  document.getElementById('btnSaveNewStudent').addEventListener('click', handleSaveNewStudentFromModal);
+
+  // Manual Case / Bad QR Modal
   UI.btnManualCase.addEventListener('click', openManualCaseModal);
   UI.btnCancelManual.addEventListener('click', () => UI.manualCaseModal.classList.remove('open'));
   UI.btnQuickConfirmAssigned.addEventListener('click', async () => {
-    if (!AppState.activeStudent) return;
+    const pairs = getStudentAssignedPairs(AppState.activeStudent);
+    if (pairs.length === 0) return;
     UI.manualCaseModal.classList.remove('open');
-    await handleInstrumentScanOrRepair(getSec(AppState.activeStudent), AppState.activeStudent.Assigned_Case_ID, '[NEEDS QR TAG] Manual Entry - Damaged/Missing QR');
+    await handleInstrumentScanFlow(pairs[0].section, pairs[0].caseId, '[NEEDS QR TAG] Manual Entry - Damaged/Missing QR');
   });
   UI.btnSubmitManual.addEventListener('click', async () => {
     const sec = UI.manualSectionInput.value.trim(), num = UI.manualCaseNumInput.value.trim();
     if (!sec || !num) return alert('Please enter both Instrument Section and Case #.');
     UI.manualCaseModal.classList.remove('open');
-    await handleInstrumentScanOrRepair(sec, num, UI.chkFlagBadQr.checked ? '[NEEDS QR TAG] Manual Entry - Damaged/Missing QR' : 'Manual Entry');
+    await handleInstrumentScanFlow(sec, num, UI.chkFlagBadQr.checked ? '[NEEDS QR TAG] Manual Entry - Damaged/Missing QR' : 'Manual Entry');
   });
 
   document.querySelectorAll('.repair-chip').forEach((chip) => {
@@ -1630,10 +1817,6 @@ function bindEvents() {
     AppState.awaitingIdLink = !AppState.awaitingIdLink;
     UI.btnLinkSchoolId.textContent = AppState.awaitingIdLink ? '📷 Scan ID...' : '🔗 Link ID';
   });
-
-  if (UI.btnAssignInstrument) {
-    UI.btnAssignInstrument.addEventListener('click', handleAssignInstrumentClick);
-  }
 
   UI.btnNextStudent.addEventListener('click', () => resetScannerState());
   UI.btnAddNote.addEventListener('click', () => { UI.noteInput.value = ''; UI.noteModal.classList.add('open'); });
