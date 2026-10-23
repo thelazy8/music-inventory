@@ -1,5 +1,5 @@
 /**
- * app.js - Complete Controller (v10: Multi-Row Return_Line_1/2/3 + Sheet-Driven Logo Size & Position)
+ * app.js - Complete Controller (v11: Unclamped Centered Logo Size + Text & Footer Alignment Controls)
  */
 const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbzSdFeiLX9wMGEkTAtviNUKABb_haLkxnAxlLJGaLYXbLO0T9PvhPOSM2pcNrjNHwkqqw/exec';
 
@@ -13,6 +13,8 @@ const STORAGE_KEYS = {
   LOGO_POSITION: 'instrument_tracker_logo_pos',
   LOGO_SIZE_PX: 'instrument_tracker_logo_size',
   QR_SIZE_PX: 'instrument_tracker_qr_size',
+  TEXT_ALIGN: 'instrument_tracker_text_align',
+  FOOTER_ALIGN: 'instrument_tracker_footer_align',
   AVERY_TEMPLATE: 'instrument_tracker_avery_template'
 };
 
@@ -27,6 +29,8 @@ const AppState = {
   logoPosition: localStorage.getItem(STORAGE_KEYS.LOGO_POSITION) || 'LEFT',
   logoSizePx: parseInt(localStorage.getItem(STORAGE_KEYS.LOGO_SIZE_PX), 10) || 48,
   qrSizePx: parseInt(localStorage.getItem(STORAGE_KEYS.QR_SIZE_PX), 10) || 0,
+  textAlignment: localStorage.getItem(STORAGE_KEYS.TEXT_ALIGN) || 'center',
+  footerAlignment: localStorage.getItem(STORAGE_KEYS.FOOTER_ALIGN) || 'center',
   averyTemplate: localStorage.getItem(STORAGE_KEYS.AVERY_TEMPLATE) || '60506',
   ensembleFilter: 'ALL',
   rosterList: [],
@@ -140,7 +144,7 @@ const UI = {
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js?v=10').catch(() => {});
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js?v=11').catch(() => {});
   localStorage.removeItem('instrument_tracker_user_pin');
   localStorage.removeItem('instrument_tracker_user_role');
 
@@ -174,6 +178,11 @@ function getGasUrl() {
   return saved && saved.startsWith('https://script.google.com/') ? saved.trim() : '';
 }
 
+function normalizeAlign(val) {
+  const clean = String(val || 'center').trim().toLowerCase();
+  return clean === 'left' || clean === 'right' ? clean : 'center';
+}
+
 function applyMasterSheetBranding(data) {
   if (typeof data.schoolHeader === 'string' && data.schoolHeader) {
     AppState.schoolHeader = data.schoolHeader;
@@ -203,6 +212,14 @@ function applyMasterSheetBranding(data) {
   if (typeof data.qrSizePx === 'number') {
     AppState.qrSizePx = data.qrSizePx;
     localStorage.setItem(STORAGE_KEYS.QR_SIZE_PX, String(data.qrSizePx));
+  }
+  if (typeof data.textAlignment === 'string' && data.textAlignment) {
+    AppState.textAlignment = normalizeAlign(data.textAlignment);
+    localStorage.setItem(STORAGE_KEYS.TEXT_ALIGN, AppState.textAlignment);
+  }
+  if (typeof data.footerAlignment === 'string' && data.footerAlignment) {
+    AppState.footerAlignment = normalizeAlign(data.footerAlignment);
+    localStorage.setItem(STORAGE_KEYS.FOOTER_ALIGN, AppState.footerAlignment);
   }
 }
 
@@ -862,6 +879,8 @@ function renderLabelSheets() {
   const logoPx = Number(AppState.logoSizePx) || 48;
   const defaultQrPx = tpl === '97184' ? 132 : 104;
   const qrPx = Number(AppState.qrSizePx) > 40 ? Number(AppState.qrSizePx) : defaultQrPx;
+  const textAlign = normalizeAlign(AppState.textAlignment);
+  const footerAlign = normalizeAlign(AppState.footerAlignment);
 
   localStorage.setItem(STORAGE_KEYS.AVERY_TEMPLATE, tpl);
 
@@ -934,8 +953,7 @@ function renderLabelSheets() {
     return;
   }
 
-  // Build separate <div> elements for each Return Line so every row in Settings renders on its own line
-  const returnLinesHtml = returnLines.map((line) => `<div class="tag-return-text">${escapeHtml(line)}</div>`).join('');
+  const returnLinesHtml = returnLines.map((line) => `<div class="tag-return-text" style="text-align:${textAlign};">${escapeHtml(line)}</div>`).join('');
 
   for (let i = 0; i < labelItems.length; i += labelsPerPage) {
     const pageSlice = labelItems.slice(i, i + labelsPerPage);
@@ -957,7 +975,7 @@ function renderLabelSheets() {
       const headerBand = document.createElement('div');
       headerBand.className = 'tag-header-band';
 
-      // Position Logo dynamically based on Settings tab (LEFT, RIGHT, TOP, or QR_CENTER)
+      // Position and scale Logo explicitly using Logo_Size_Px
       if (AppState.schoolLogoDataUrl && logoPos !== 'QR_CENTER' && logoPos !== 'NONE') {
         if (logoPos === 'TOP') headerBand.style.flexDirection = 'column';
         else if (logoPos === 'RIGHT') headerBand.style.flexDirection = 'row-reverse';
@@ -966,27 +984,26 @@ function renderLabelSheets() {
         const logoImg = document.createElement('img');
         logoImg.className = 'tag-logo-img';
         logoImg.src = AppState.schoolLogoDataUrl;
-        logoImg.style.maxHeight = `${logoPx}px`;
-        logoImg.style.maxWidth = `${Math.round(logoPx * 1.5)}px`;
-        logoImg.style.width = 'auto';
-        logoImg.style.height = 'auto';
+        logoImg.style.cssText = `height:${logoPx}px; max-height:${logoPx}px; width:auto; max-width:${Math.round(logoPx * 1.8)}px; object-fit:contain; flex-shrink:0;`;
         headerBand.appendChild(logoImg);
       }
 
       const schoolBlock = document.createElement('div');
       schoolBlock.className = 'tag-school-block';
-      schoolBlock.innerHTML = `<div class="tag-school-name">${escapeHtml(schoolHeader)}</div>${returnLinesHtml}`;
+      schoolBlock.style.textAlign = textAlign;
+      schoolBlock.innerHTML = `<div class="tag-school-name" style="text-align:${textAlign};">${escapeHtml(schoolHeader)}</div>${returnLinesHtml}`;
       headerBand.appendChild(schoolBlock);
       inner.appendChild(headerBand);
 
       if (item.returnStickerOnly) {
         const centerNotice = document.createElement('div');
-        centerNotice.style.padding = '8px 4px';
-        centerNotice.innerHTML = `<div style="font-size:11pt; font-weight:900; margin-bottom:4px;">SCHOOL PROPERTY</div>${returnLinesHtml}`;
+        centerNotice.style.cssText = `padding:8px 4px; width:100%; text-align:${textAlign};`;
+        centerNotice.innerHTML = `<div style="font-size:11pt; font-weight:900; margin-bottom:4px; text-align:${textAlign};">SCHOOL PROPERTY</div>${returnLinesHtml}`;
         inner.appendChild(centerNotice);
         const footerBand = document.createElement('div');
         footerBand.className = 'tag-footer-band';
-        footerBand.innerHTML = `<div class="tag-sub-id">DO NOT REMOVE TAG FROM CASE</div>`;
+        footerBand.style.textAlign = footerAlign;
+        footerBand.innerHTML = `<div class="tag-sub-id" style="text-align:${footerAlign};">DO NOT REMOVE TAG FROM CASE</div>`;
         inner.appendChild(footerBand);
       } else {
         const qrWrap = document.createElement('div');
@@ -997,12 +1014,11 @@ function renderLabelSheets() {
         new QRious({ element: canvas, value: item.payload, size: qrPx, level: 'H' });
         qrWrap.appendChild(canvas);
 
-        // Optional QR_CENTER mode: overlays logo in the center of the Level-H QR code!
+        // Unclamped QR_CENTER mode: uses exact Logo_Size_Px from Settings tab!
         if (AppState.schoolLogoDataUrl && logoPos === 'QR_CENTER') {
           const centerLogo = document.createElement('img');
           centerLogo.src = AppState.schoolLogoDataUrl;
-          const badgeSize = Math.min(logoPx, Math.round(qrPx * 0.28));
-          centerLogo.style.cssText = `position:absolute; max-height:${badgeSize}px; max-width:${badgeSize}px; background:#fff; padding:2px; border-radius:4px; border:1px solid #000;`;
+          centerLogo.style.cssText = `position:absolute; height:${logoPx}px; max-height:${logoPx}px; width:auto; max-width:${Math.round(logoPx * 1.5)}px; object-fit:contain; background:#fff; padding:2px; border-radius:4px; border:1px solid #000;`;
           qrWrap.appendChild(centerLogo);
         }
 
@@ -1010,7 +1026,8 @@ function renderLabelSheets() {
 
         const footerBand = document.createElement('div');
         footerBand.className = 'tag-footer-band';
-        footerBand.innerHTML = `<div class="tag-main-id">${escapeHtml(item.mainTitle)}</div>${item.subTitle ? `<div class="tag-sub-id">${escapeHtml(item.subTitle)}</div>` : ''}`;
+        footerBand.style.textAlign = footerAlign;
+        footerBand.innerHTML = `<div class="tag-main-id" style="text-align:${footerAlign};">${escapeHtml(item.mainTitle)}</div>${item.subTitle ? `<div class="tag-sub-id" style="text-align:${footerAlign};">${escapeHtml(item.subTitle)}</div>` : ''}`;
         inner.appendChild(footerBand);
       }
 
