@@ -1,5 +1,5 @@
 /**
- * app.js - Complete Controller (Mandatory Login on Load + Portrait 2x3 Avery 97184)
+ * app.js - Complete Controller (v9: 100% Untruncated)
  */
 const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbzSdFeiLX9wMGEkTAtviNUKABb_haLkxnAxlLJGaLYXbLO0T9PvhPOSM2pcNrjNHwkqqw/exec';
 
@@ -85,13 +85,19 @@ const UI = {
   qrStartColSelect: document.getElementById('qrStartColSelect'),
   qrTypeSelect: document.getElementById('qrTypeSelect'),
   qrEnsembleSelect: document.getElementById('qrEnsembleSelect'),
+  qrCustomFilterBox: document.getElementById('qrCustomFilterBox'),
+  qrCustomQueryInput: document.getElementById('qrCustomQueryInput'),
   qrSchoolHeaderInput: document.getElementById('qrSchoolHeaderInput'),
   qrReturnInfoInput: document.getElementById('qrReturnInfoInput'),
   qrLogoFileInput: document.getElementById('qrLogoFileInput'),
   btnClearLogo: document.getElementById('btnClearLogo'),
   qrSingleInputs: document.getElementById('qrSingleInputs'),
+  qrSingleSpecsRow: document.getElementById('qrSingleSpecsRow'),
   qrInputPrimary: document.getElementById('qrInputPrimary'),
   qrInputSecondary: document.getElementById('qrInputSecondary'),
+  qrInputBrand: document.getElementById('qrInputBrand'),
+  qrInputModel: document.getElementById('qrInputModel'),
+  qrInputSerial: document.getElementById('qrInputSerial'),
   btnPrintQr: document.getElementById('btnPrintQr'),
   qrPreviewGrid: document.getElementById('qrPreviewGrid'),
   repairModal: document.getElementById('repairModal'),
@@ -132,7 +138,7 @@ const UI = {
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js?v=9').catch(() => {});
   localStorage.removeItem('instrument_tracker_user_pin');
   localStorage.removeItem('instrument_tracker_user_role');
 
@@ -196,10 +202,7 @@ async function handleLoginAttempt() {
     const res = await fetch(authUrl, { method: 'GET', redirect: 'follow' });
     const data = await res.json();
 
-    if (data.status === 'UNAUTHORIZED') {
-      showLoginError('Invalid Access PIN. Please check with the Music Director.');
-      return;
-    }
+    if (data.status === 'UNAUTHORIZED') return showLoginError('Invalid Access PIN. Please check with the Music Director.');
 
     let role = data.role || (pin === '9988' ? 'ADMIN' : pin === '2468' ? 'VOLUNTEER' : null);
     if (!role) return showLoginError('Invalid Access PIN.');
@@ -218,10 +221,7 @@ async function handleLoginAttempt() {
     }
     if (Array.isArray(data.roster)) {
       await window.TrackerDB.saveServerBundle({
-        roster: data.roster || [],
-        instruments: data.instruments || [],
-        logs: data.logs || [],
-        repairs: data.repairs || []
+        roster: data.roster || [], instruments: data.instruments || [], logs: data.logs || [], repairs: data.repairs || []
       });
       await reloadMemoryFromIndexedDB();
     }
@@ -298,7 +298,7 @@ async function syncWithServer(showAlert = false) {
         roster: data.roster, instruments: data.instruments || [], logs: data.logs || [], repairs: data.repairs || []
       });
       await reloadMemoryFromIndexedDB();
-      if (showAlert) alert(`Synced ${AppState.rosterList.length} records & ${AppState.scanHistory.length} logs.`);
+      if (showAlert) alert(`Synced ${AppState.rosterList.length} students & ${AppState.instrumentsList.length} instruments.`);
     }
   } catch (err) {
     console.warn('Sync error:', err);
@@ -690,11 +690,20 @@ async function evaluateAndLogInstrumentScan(scannedSection, scannedCaseId, initi
   flushOutboundQueue();
 }
 
+function formatInstSpecs(inst) {
+  if (!inst) return '';
+  const parts = [];
+  if (inst.Brand) parts.push(inst.Brand);
+  if (inst.Model) parts.push(inst.Model);
+  if (inst.Serial) parts.push(`SN: ${inst.Serial}`);
+  return parts.join(' • ');
+}
+
 function runStatusSearch(rawQuery) {
   const q = String(rawQuery || '').trim().toLowerCase();
   if (!q) {
     UI.searchResultsContainer.innerHTML = `<div style="color:var(--text-muted); text-align:center; padding:20px;">
-      Type an instrument (e.g. <strong>"Trumpet 1"</strong>), student name (e.g. <strong>"Joe"</strong>), <strong>"Repair"</strong>, or <strong>"Needs QR"</strong>.
+      Type an instrument (e.g. <strong>"Trumpet 1"</strong>), student name (e.g. <strong>"Joe"</strong>), Brand/Serial, <strong>"Repair"</strong>, or <strong>"Needs QR"</strong>.
     </div>`;
     return;
   }
@@ -702,12 +711,12 @@ function runStatusSearch(rawQuery) {
   const matchedInstruments = AppState.instrumentsList.filter((inst) => {
     const combo1 = `${inst.Section} ${inst.Case_ID}`.toLowerCase();
     const combo2 = `${inst.Section} #${inst.Case_ID}`.toLowerCase();
-    const assigned = (inst.Assigned_Student || '').toLowerCase();
+    const specs = `${inst.Brand || ''} ${inst.Model || ''} ${inst.Serial || ''} ${inst.Assigned_Student || ''}`.toLowerCase();
     const instLogs = AppState.scanHistory.filter((l) => String(l.Section || '').toUpperCase() === inst.Section.toUpperCase() && String(l.Case_ID || '').toUpperCase() === String(inst.Case_ID).toUpperCase());
     const lastLog = instLogs.length > 0 ? instLogs[instLogs.length - 1] : null;
     const lastNote = lastLog ? String(lastLog.Volunteer_Note || '').toLowerCase() : '';
     const lastFlag = lastLog ? String(lastLog.Status_Flag || '').toLowerCase() : '';
-    return combo1.includes(q) || combo2.includes(q) || assigned.includes(q) || lastNote.includes(q) || lastFlag.includes(q);
+    return combo1.includes(q) || combo2.includes(q) || specs.includes(q) || lastNote.includes(q) || lastFlag.includes(q);
   });
 
   for (const inst of matchedInstruments) {
@@ -720,7 +729,9 @@ function runStatusSearch(rawQuery) {
     let badgeClass = inRepair ? 'badge-repair' : isOut ? 'badge-out' : 'badge-in';
     let badgeLabel = inRepair ? '🔧 IN REPAIR' : isOut ? 'CHECKED OUT' : 'IN STORAGE';
 
+    const specsLine = formatInstSpecs(inst);
     let statusDetail = `Roster Assignment: <strong>${inst.Assigned_Student}</strong> (${inst.Ensemble} #${inst.Assigned_Line || '—'})`;
+    if (specsLine) statusDetail += `<br>Specs: <strong>${escapeHtml(specsLine)}</strong>`;
     if (lastLog) {
       statusDetail += `<br>Last Action: <strong>${inRepair ? 'Sent to Repair' : lastLog.Action === 'CHECK_OUT' ? 'Checked OUT' : 'Checked IN'}</strong> — ${lastLog.Student_Name} on ${formatShortDate(lastLog.Timestamp)}${lastLog.Scanned_By ? ' (by ' + lastLog.Scanned_By + ')' : ''}`;
       if (lastLog.Volunteer_Note) statusDetail += `<br>Note: <em>${escapeHtml(lastLog.Volunteer_Note)}</em>`;
@@ -755,6 +766,49 @@ function formatShortDate(isoStr) {
   catch (_) { return isoStr; }
 }
 
+function filterByCustomKeywords(items, rawQuery, isStudentMode) {
+  const cleanQuery = String(rawQuery || '').trim();
+  if (!cleanQuery) return items;
+
+  const tokens = cleanQuery.split(/[,;\n]+/).map((t) => t.trim().toLowerCase().replace(/#/g, '')).filter(Boolean);
+  if (tokens.length === 0) return items;
+
+  const matchedResults = [];
+  const seenKeys = new Set();
+
+  for (const token of tokens) {
+    const exactNumMatch = token.match(/^([a-z\s]+?)\s+(\d+[a-z]*)$/);
+    for (const item of items) {
+      const uniqueId = isStudentMode ? item.composite_id : item.inst_key;
+      if (seenKeys.has(uniqueId)) continue;
+
+      let isMatch = false;
+      if (exactNumMatch) {
+        const textPart = exactNumMatch[1].trim();
+        const numPart = exactNumMatch[2].trim();
+        if (isStudentMode) {
+          const stuText = `${item.Ensemble} ${item.Student_Name} ${item.Section}`.toLowerCase();
+          isMatch = stuText.includes(textPart) && (String(item.Line_Number).toLowerCase() === numPart || String(item.Assigned_Case_ID).toLowerCase() === numPart);
+        } else {
+          const instText = `${item.Section} ${item.Ensemble} ${item.Brand || ''}`.toLowerCase();
+          isMatch = instText.includes(textPart) && String(item.Case_ID).toLowerCase() === numPart;
+        }
+      } else {
+        const haystack = isStudentMode
+          ? `${item.Student_Name} ${item.Ensemble} ${item.Section} ${item.Line_Number}`.toLowerCase()
+          : `${item.Section} ${item.Case_ID} ${item.Ensemble} ${item.Assigned_Student || ''} ${item.Brand || ''} ${item.Model || ''} ${item.Serial || ''}`.toLowerCase();
+        isMatch = haystack.includes(token);
+      }
+
+      if (isMatch) {
+        seenKeys.add(uniqueId);
+        matchedResults.push(item);
+      }
+    }
+  }
+  return matchedResults;
+}
+
 function updateStartColOptions() {
   if (!UI.qrTemplateSelect || !UI.qrStartColSelect) return;
   const maxCols = UI.qrTemplateSelect.value === '97184' ? 2 : 3;
@@ -775,6 +829,7 @@ function renderLabelSheets() {
 
   const mode = UI.qrTypeSelect.value;
   const ensFilter = UI.qrEnsembleSelect.value;
+  const customQuery = UI.qrCustomQueryInput ? UI.qrCustomQueryInput.value : '';
   const schoolHeader = UI.qrSchoolHeaderInput.value.trim() || 'MS MUSIC PROGRAM';
   const returnInfo = UI.qrReturnInfoInput.value.trim() || 'If found, return to Music Room';
 
@@ -788,7 +843,14 @@ function renderLabelSheets() {
   if (mode === 'SINGLE_INST') {
     const sec = UI.qrInputPrimary.value.trim() || 'Trumpet';
     const num = UI.qrInputSecondary.value.trim() || '1';
-    labelItems.push({ payload: `INST|${sec}|${num}`, mainTitle: `${sec.toUpperCase()} #${num}`, subTitle: '' });
+    const key = `${sec.toUpperCase()}|${num.toUpperCase()}`;
+    const existing = AppState.instrumentsList.find((i) => i.inst_key === key);
+    const manualSpecs = formatInstSpecs({
+      Brand: (UI.qrInputBrand && UI.qrInputBrand.value.trim()) || (existing && existing.Brand) || '',
+      Model: (UI.qrInputModel && UI.qrInputModel.value.trim()) || (existing && existing.Model) || '',
+      Serial: (UI.qrInputSerial && UI.qrInputSerial.value.trim()) || (existing && existing.Serial) || ''
+    });
+    labelItems.push({ payload: `INST|${sec}|${num}`, mainTitle: `${sec.toUpperCase()} #${num}`, subTitle: manualSpecs });
   } else if (mode === 'SINGLE_STU') {
     const name = UI.qrInputPrimary.value.trim() || 'Student';
     const line = UI.qrInputSecondary.value.trim() || '1';
@@ -806,21 +868,41 @@ function renderLabelSheets() {
     for (const key of flaggedSet) {
       const [sec, num] = key.split('|');
       const matchedInst = AppState.instrumentsList.find((i) => i.inst_key === key);
-      labelItems.push({ payload: `INST|${matchedInst ? matchedInst.Section : sec}|${matchedInst ? matchedInst.Case_ID : num}`, mainTitle: `${sec} #${num}`, subTitle: '' });
+      labelItems.push({
+        payload: `INST|${matchedInst ? matchedInst.Section : sec}|${matchedInst ? matchedInst.Case_ID : num}`,
+        mainTitle: `${sec} #${num}`,
+        subTitle: formatInstSpecs(matchedInst)
+      });
     }
-  } else if (mode === 'BATCH_INST') {
-    const list = AppState.instrumentsList.filter((i) => ensFilter === 'ALL' || i.Ensemble.toUpperCase() === ensFilter.toUpperCase());
-    for (const inst of list) labelItems.push({ payload: `INST|${inst.Section}|${inst.Case_ID}`, mainTitle: `${inst.Section.toUpperCase()} #${inst.Case_ID}`, subTitle: '' });
+  } else if (mode === 'BATCH_MASTER_INST' || mode === 'BATCH_ROSTER_INST') {
+    const hasAnyMasterRows = AppState.instrumentsList.some((i) => i.in_master_tab);
+    let list = AppState.instrumentsList.filter((i) => {
+      const ensOk = ensFilter === 'ALL' || !i.Ensemble || i.Ensemble.toUpperCase() === ensFilter.toUpperCase();
+      if (!ensOk) return false;
+      if (mode === 'BATCH_MASTER_INST') return hasAnyMasterRows ? i.in_master_tab : true;
+      return i.in_roster;
+    });
+    list = filterByCustomKeywords(list, customQuery, false);
+    for (const inst of list) {
+      labelItems.push({
+        payload: `INST|${inst.Section}|${inst.Case_ID}`,
+        mainTitle: `${inst.Section.toUpperCase()} #${inst.Case_ID}`,
+        subTitle: formatInstSpecs(inst)
+      });
+    }
   } else if (mode === 'BATCH_STU') {
-    const list = AppState.rosterList.filter((s) => !isRepairShopEntity(s) && (ensFilter === 'ALL' || s.Ensemble.toUpperCase() === ensFilter.toUpperCase()));
-    for (const stu of list) labelItems.push({ payload: `STU|${stu.Ensemble}|${stu.Line_Number}`, mainTitle: `${stu.Ensemble.toUpperCase()} #${stu.Line_Number}`, subTitle: stu.Student_Name });
+    let list = AppState.rosterList.filter((s) => !isRepairShopEntity(s) && (ensFilter === 'ALL' || s.Ensemble.toUpperCase() === ensFilter.toUpperCase()));
+    list = filterByCustomKeywords(list, customQuery, true);
+    for (const stu of list) {
+      labelItems.push({ payload: `STU|${stu.Ensemble}|${stu.Line_Number}`, mainTitle: `${stu.Ensemble.toUpperCase()} #${stu.Line_Number}`, subTitle: stu.Student_Name });
+    }
   } else if (mode === 'RETURN_ONLY') {
     for (let i = 0; i < labelsPerPage - emptySkipCount; i++) labelItems.push({ returnStickerOnly: true });
   }
 
   UI.qrPreviewGrid.innerHTML = '';
   if (labelItems.filter((x) => !x.emptySlot).length === 0) {
-    UI.qrPreviewGrid.innerHTML = `<div style="color:var(--text-muted); padding:24px; text-align:center;">No matching tags to generate.</div>`;
+    UI.qrPreviewGrid.innerHTML = `<div style="color:var(--text-muted); padding:24px; text-align:center;">No matching tags found for that filter.</div>`;
     return;
   }
 
@@ -838,7 +920,6 @@ function renderLabelSheets() {
         continue;
       }
 
-      // Inner card uses 2"x3" Portrait orientation on Avery 97184 and 2"x2" on Avery 60506
       const inner = document.createElement('div');
       inner.className = 'tag-inner-card';
 
@@ -869,8 +950,7 @@ function renderLabelSheets() {
         const qrWrap = document.createElement('div');
         qrWrap.className = 'tag-qr-wrap';
         const canvas = document.createElement('canvas');
-        // Larger 142px QR code on 2x3 Portrait tags to take advantage of the 3-inch length!
-        new QRious({ element: canvas, value: item.payload, size: tpl === '97184' ? 142 : 112, level: 'H' });
+        new QRious({ element: canvas, value: item.payload, size: tpl === '97184' ? 136 : 106, level: 'H' });
         qrWrap.appendChild(canvas);
         inner.appendChild(qrWrap);
 
@@ -1084,15 +1164,24 @@ function bindEvents() {
   if (UI.qrStartColSelect) UI.qrStartColSelect.addEventListener('change', renderLabelSheets);
 
   UI.qrTypeSelect.addEventListener('change', () => {
-    const isSingle = UI.qrTypeSelect.value.startsWith('SINGLE_');
-    UI.qrSingleInputs.style.display = isSingle ? 'grid' : 'none';
+    const mode = UI.qrTypeSelect.value;
+    const isSingle = mode.startsWith('SINGLE_');
+    const isBatch = mode.startsWith('BATCH_');
+    UI.qrSingleInputs.style.display = isSingle ? 'flex' : 'none';
+    if (UI.qrSingleSpecsRow) UI.qrSingleSpecsRow.style.display = mode === 'SINGLE_INST' ? 'grid' : 'none';
+    if (UI.qrCustomFilterBox) UI.qrCustomFilterBox.style.display = isBatch ? 'block' : 'none';
     renderLabelSheets();
   });
+
   UI.qrEnsembleSelect.addEventListener('change', renderLabelSheets);
+  if (UI.qrCustomQueryInput) UI.qrCustomQueryInput.addEventListener('input', renderLabelSheets);
   UI.qrSchoolHeaderInput.addEventListener('input', renderLabelSheets);
   UI.qrReturnInfoInput.addEventListener('input', renderLabelSheets);
   UI.qrInputPrimary.addEventListener('input', renderLabelSheets);
   UI.qrInputSecondary.addEventListener('input', renderLabelSheets);
+  if (UI.qrInputBrand) UI.qrInputBrand.addEventListener('input', renderLabelSheets);
+  if (UI.qrInputModel) UI.qrInputModel.addEventListener('input', renderLabelSheets);
+  if (UI.qrInputSerial) UI.qrInputSerial.addEventListener('input', renderLabelSheets);
 
   UI.qrLogoFileInput.addEventListener('change', (e) => {
     const file = e.target.files && e.target.files[0];
