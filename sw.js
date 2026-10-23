@@ -1,14 +1,9 @@
-/**
- * sw.js - Network-First Service Worker (v4)
- * Always fetches latest code when online; falls back to offline cache when Wi-Fi drops.
- */
-
-const CACHE_NAME = 'bandscan-pwa-v4';
+const CACHE_NAME = 'bandscan-pwa-v8';
 const ASSETS = [
   './',
   './index.html',
-  './app.js',
-  './db.js',
+  './app.js?v=8',
+  './db.js?v=8',
   './manifest.json',
   'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js'
@@ -37,9 +32,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Network-First: Always grab fresh code when online, fall back to cache when offline
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: 'no-cache' })
       .then((res) => {
         if (res && res.status === 200) {
           const clone = res.clone();
