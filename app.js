@@ -1,5 +1,5 @@
 /**
- * app.js - Complete Controller (Pulls School_Header, Return_Info, & School_Logo from Master Sheet)
+ * app.js - Complete Controller (v10: Multi-Row Return_Line_1/2/3 + Sheet-Driven Logo Size & Position)
  */
 const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbzSdFeiLX9wMGEkTAtviNUKABb_haLkxnAxlLJGaLYXbLO0T9PvhPOSM2pcNrjNHwkqqw/exec';
 
@@ -8,8 +8,11 @@ const STORAGE_KEYS = {
   ACTION_MODE: 'instrument_tracker_action_mode',
   USER_NAME: 'instrument_tracker_user_name',
   SCHOOL_HEADER: 'instrument_tracker_school_header',
-  RETURN_INFO: 'instrument_tracker_return_info',
+  RETURN_LINES: 'instrument_tracker_return_lines',
   SCHOOL_LOGO: 'instrument_tracker_school_logo',
+  LOGO_POSITION: 'instrument_tracker_logo_pos',
+  LOGO_SIZE_PX: 'instrument_tracker_logo_size',
+  QR_SIZE_PX: 'instrument_tracker_qr_size',
   AVERY_TEMPLATE: 'instrument_tracker_avery_template'
 };
 
@@ -19,8 +22,11 @@ const AppState = {
   userPin: '',
   userRole: '',
   schoolHeader: localStorage.getItem(STORAGE_KEYS.SCHOOL_HEADER) || 'MS MUSIC PROGRAM',
-  returnInfo: localStorage.getItem(STORAGE_KEYS.RETURN_INFO) || 'If found, return to Music Room',
+  returnLines: JSON.parse(localStorage.getItem(STORAGE_KEYS.RETURN_LINES) || '["If found, return to Music Room"]'),
   schoolLogoDataUrl: localStorage.getItem(STORAGE_KEYS.SCHOOL_LOGO) || '',
+  logoPosition: localStorage.getItem(STORAGE_KEYS.LOGO_POSITION) || 'LEFT',
+  logoSizePx: parseInt(localStorage.getItem(STORAGE_KEYS.LOGO_SIZE_PX), 10) || 48,
+  qrSizePx: parseInt(localStorage.getItem(STORAGE_KEYS.QR_SIZE_PX), 10) || 0,
   averyTemplate: localStorage.getItem(STORAGE_KEYS.AVERY_TEMPLATE) || '60506',
   ensembleFilter: 'ALL',
   rosterList: [],
@@ -87,10 +93,6 @@ const UI = {
   qrEnsembleSelect: document.getElementById('qrEnsembleSelect'),
   qrCustomFilterBox: document.getElementById('qrCustomFilterBox'),
   qrCustomQueryInput: document.getElementById('qrCustomQueryInput'),
-  qrSchoolHeaderInput: document.getElementById('qrSchoolHeaderInput'),
-  qrReturnInfoInput: document.getElementById('qrReturnInfoInput'),
-  qrLogoFileInput: document.getElementById('qrLogoFileInput'),
-  btnClearLogo: document.getElementById('btnClearLogo'),
   qrSingleInputs: document.getElementById('qrSingleInputs'),
   qrSingleSpecsRow: document.getElementById('qrSingleSpecsRow'),
   qrInputPrimary: document.getElementById('qrInputPrimary'),
@@ -138,18 +140,9 @@ const UI = {
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js?v=9').catch(() => {});
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js?v=10').catch(() => {});
   localStorage.removeItem('instrument_tracker_user_pin');
   localStorage.removeItem('instrument_tracker_user_role');
-
-  // Hide School Header, Return Info, and Logo inputs from the UI (managed in Google Sheet Settings tab only)
-  if (UI.qrSchoolHeaderInput && UI.qrSchoolHeaderInput.closest('.form-row')) {
-    UI.qrSchoolHeaderInput.closest('.form-row').style.display = 'none';
-  }
-  if (UI.qrLogoFileInput && UI.qrLogoFileInput.parentElement) {
-    UI.qrLogoFileInput.parentElement.style.display = 'none';
-  }
-  if (UI.btnClearLogo) UI.btnClearLogo.style.display = 'none';
 
   const params = new URLSearchParams(window.location.search);
   const apiParam = params.get('api');
@@ -186,14 +179,30 @@ function applyMasterSheetBranding(data) {
     AppState.schoolHeader = data.schoolHeader;
     localStorage.setItem(STORAGE_KEYS.SCHOOL_HEADER, data.schoolHeader);
   }
-  if (typeof data.returnInfo === 'string' && data.returnInfo) {
-    AppState.returnInfo = data.returnInfo;
-    localStorage.setItem(STORAGE_KEYS.RETURN_INFO, data.returnInfo);
+  if (Array.isArray(data.returnLines) && data.returnLines.length > 0) {
+    AppState.returnLines = data.returnLines;
+    localStorage.setItem(STORAGE_KEYS.RETURN_LINES, JSON.stringify(data.returnLines));
+  } else if (typeof data.returnInfo === 'string' && data.returnInfo) {
+    const lines = data.returnInfo.split(/\r?\n|\|/).map((s) => s.trim()).filter(Boolean);
+    AppState.returnLines = lines;
+    localStorage.setItem(STORAGE_KEYS.RETURN_LINES, JSON.stringify(lines));
   }
   if (typeof data.schoolLogo === 'string') {
     AppState.schoolLogoDataUrl = data.schoolLogo;
     if (data.schoolLogo) localStorage.setItem(STORAGE_KEYS.SCHOOL_LOGO, data.schoolLogo);
     else localStorage.removeItem(STORAGE_KEYS.SCHOOL_LOGO);
+  }
+  if (typeof data.logoPosition === 'string' && data.logoPosition) {
+    AppState.logoPosition = data.logoPosition.toUpperCase();
+    localStorage.setItem(STORAGE_KEYS.LOGO_POSITION, AppState.logoPosition);
+  }
+  if (typeof data.logoSizePx === 'number' && data.logoSizePx > 0) {
+    AppState.logoSizePx = data.logoSizePx;
+    localStorage.setItem(STORAGE_KEYS.LOGO_SIZE_PX, String(data.logoSizePx));
+  }
+  if (typeof data.qrSizePx === 'number') {
+    AppState.qrSizePx = data.qrSizePx;
+    localStorage.setItem(STORAGE_KEYS.QR_SIZE_PX, String(data.qrSizePx));
   }
 }
 
@@ -846,7 +855,13 @@ function renderLabelSheets() {
   const ensFilter = UI.qrEnsembleSelect.value;
   const customQuery = UI.qrCustomQueryInput ? UI.qrCustomQueryInput.value : '';
   const schoolHeader = AppState.schoolHeader || 'MS MUSIC PROGRAM';
-  const returnInfo = AppState.returnInfo || 'If found, return to Music Room';
+  const returnLines = Array.isArray(AppState.returnLines) && AppState.returnLines.length > 0
+    ? AppState.returnLines
+    : ['If found, return to Music Room'];
+  const logoPos = (AppState.logoPosition || 'LEFT').toUpperCase();
+  const logoPx = Number(AppState.logoSizePx) || 48;
+  const defaultQrPx = tpl === '97184' ? 132 : 104;
+  const qrPx = Number(AppState.qrSizePx) > 40 ? Number(AppState.qrSizePx) : defaultQrPx;
 
   localStorage.setItem(STORAGE_KEYS.AVERY_TEMPLATE, tpl);
 
@@ -919,6 +934,9 @@ function renderLabelSheets() {
     return;
   }
 
+  // Build separate <div> elements for each Return Line so every row in Settings renders on its own line
+  const returnLinesHtml = returnLines.map((line) => `<div class="tag-return-text">${escapeHtml(line)}</div>`).join('');
+
   for (let i = 0; i < labelItems.length; i += labelsPerPage) {
     const pageSlice = labelItems.slice(i, i + labelsPerPage);
     const pageEl = document.createElement('div');
@@ -938,22 +956,33 @@ function renderLabelSheets() {
 
       const headerBand = document.createElement('div');
       headerBand.className = 'tag-header-band';
-      if (AppState.schoolLogoDataUrl) {
+
+      // Position Logo dynamically based on Settings tab (LEFT, RIGHT, TOP, or QR_CENTER)
+      if (AppState.schoolLogoDataUrl && logoPos !== 'QR_CENTER' && logoPos !== 'NONE') {
+        if (logoPos === 'TOP') headerBand.style.flexDirection = 'column';
+        else if (logoPos === 'RIGHT') headerBand.style.flexDirection = 'row-reverse';
+        else headerBand.style.flexDirection = 'row';
+
         const logoImg = document.createElement('img');
         logoImg.className = 'tag-logo-img';
         logoImg.src = AppState.schoolLogoDataUrl;
+        logoImg.style.maxHeight = `${logoPx}px`;
+        logoImg.style.maxWidth = `${Math.round(logoPx * 1.5)}px`;
+        logoImg.style.width = 'auto';
+        logoImg.style.height = 'auto';
         headerBand.appendChild(logoImg);
       }
+
       const schoolBlock = document.createElement('div');
       schoolBlock.className = 'tag-school-block';
-      schoolBlock.innerHTML = `<div class="tag-school-name">${escapeHtml(schoolHeader)}</div><div class="tag-return-text">${escapeHtml(returnInfo)}</div>`;
+      schoolBlock.innerHTML = `<div class="tag-school-name">${escapeHtml(schoolHeader)}</div>${returnLinesHtml}`;
       headerBand.appendChild(schoolBlock);
       inner.appendChild(headerBand);
 
       if (item.returnStickerOnly) {
         const centerNotice = document.createElement('div');
         centerNotice.style.padding = '8px 4px';
-        centerNotice.innerHTML = `<div style="font-size:11pt; font-weight:900; margin-bottom:4px;">SCHOOL PROPERTY</div><div style="font-size:8pt; font-weight:700; line-height:1.25;">${escapeHtml(returnInfo)}</div>`;
+        centerNotice.innerHTML = `<div style="font-size:11pt; font-weight:900; margin-bottom:4px;">SCHOOL PROPERTY</div>${returnLinesHtml}`;
         inner.appendChild(centerNotice);
         const footerBand = document.createElement('div');
         footerBand.className = 'tag-footer-band';
@@ -962,9 +991,21 @@ function renderLabelSheets() {
       } else {
         const qrWrap = document.createElement('div');
         qrWrap.className = 'tag-qr-wrap';
+        qrWrap.style.position = 'relative';
+
         const canvas = document.createElement('canvas');
-        new QRious({ element: canvas, value: item.payload, size: tpl === '97184' ? 136 : 106, level: 'H' });
+        new QRious({ element: canvas, value: item.payload, size: qrPx, level: 'H' });
         qrWrap.appendChild(canvas);
+
+        // Optional QR_CENTER mode: overlays logo in the center of the Level-H QR code!
+        if (AppState.schoolLogoDataUrl && logoPos === 'QR_CENTER') {
+          const centerLogo = document.createElement('img');
+          centerLogo.src = AppState.schoolLogoDataUrl;
+          const badgeSize = Math.min(logoPx, Math.round(qrPx * 0.28));
+          centerLogo.style.cssText = `position:absolute; max-height:${badgeSize}px; max-width:${badgeSize}px; background:#fff; padding:2px; border-radius:4px; border:1px solid #000;`;
+          qrWrap.appendChild(centerLogo);
+        }
+
         inner.appendChild(qrWrap);
 
         const footerBand = document.createElement('div');
