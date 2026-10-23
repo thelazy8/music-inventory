@@ -1,4 +1,4 @@
-// app.js - Complete Controller (v13: Compact & 100% Untruncated)
+// app.js - Complete Controller (v14: Tappable Full History & Practice Habit Timeline Modal)
 const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbzSdFeiLX9wMGEkTAtviNUKABb_haLkxnAxlLJGaLYXbLO0T9PvhPOSM2pcNrjNHwkqqw/exec';
 
 const STORAGE_KEYS = {
@@ -243,6 +243,18 @@ function injectWideCameraAndModals() {
     .tx-hero-sub { font-size: 0.85rem; font-weight: 700; color: #cbd5e1; margin-top: 4px; }
     .tx-error-banner { background: #7f1d1d; border: 1px solid #ef4444; color: #fecaca; padding: 10px; border-radius: 8px; font-size: 0.82rem; font-weight: 700; margin-bottom: 10px; text-align: center; }
     .tx-assign-box { background: rgba(2,132,199,0.15); border: 1px solid #0284c7; border-radius: 8px; padding: 10px; margin-bottom: 12px; font-size: 0.82rem; }
+    .result-card.tappable-card { cursor: pointer; transition: border-color 0.15s, transform 0.1s; }
+    .result-card.tappable-card:active { transform: scale(0.99); border-color: #38bdf8; }
+    .tap-history-hint { font-size: 0.72rem; font-weight: 800; color: #38bdf8; margin-top: 4px; display: flex; justify-content: space-between; align-items: center; padding-top: 6px; border-top: 1px solid #334155; }
+    .stat-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 12px; }
+    .stat-mini-box { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 8px 6px; text-align: center; }
+    .stat-mini-num { font-size: 1.2rem; font-weight: 900; color: #fff; }
+    .stat-mini-lbl { font-size: 0.65rem; color: #94a3b8; text-transform: uppercase; font-weight: 700; }
+    .timeline-list { display: flex; flex-direction: column; gap: 8px; max-height: 52dvh; overflow-y: auto; padding-right: 2px; }
+    .timeline-item { background: #0f172a; border-left: 4px solid #38bdf8; border-radius: 6px; padding: 8px 10px; font-size: 0.8rem; line-height: 1.35; }
+    .timeline-item.tl-out { border-left-color: #f97316; }
+    .timeline-item.tl-in { border-left-color: #22c55e; }
+    .timeline-item.tl-repair { border-left-color: #a855f7; }
   `;
   document.head.appendChild(style);
 
@@ -284,6 +296,7 @@ function injectWideCameraAndModals() {
         </div>
       </div>
     </div>
+
     <div id="unlistedModal" class="modal-backdrop">
       <div class="modal-box">
         <div style="font-weight:900; font-size:1.1rem; color:#fcd34d; margin-bottom:6px;">⚠️ Unlisted Line Number</div>
@@ -303,6 +316,24 @@ function injectWideCameraAndModals() {
         </div>
         <div style="margin-bottom:12px;"><label class="field-label">Student Full Name</label><input id="newStuNameInput" class="form-input" type="text" placeholder="e.g. Sam Carter"></div>
         <button id="btnSaveNewStudent" class="btn-primary" style="width:100%;" type="button">➕ Save Student to Roster & Continue</button>
+      </div>
+    </div>
+
+    <div id="historyModal" class="modal-backdrop">
+      <div class="modal-box">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px;">
+          <div>
+            <div id="histModalTitle" style="font-weight:900; font-size:1.12rem; color:#38bdf8;">📜 Full History</div>
+            <div id="histModalSub" style="font-size:0.78rem; color:#94a3b8; margin-top:2px;">Active Term Log</div>
+          </div>
+          <button id="btnCloseHistory" class="btn-secondary" style="padding:5px 10px; font-size:0.8rem;" type="button">✖ Close</button>
+        </div>
+        <div class="stat-grid-3">
+          <div class="stat-mini-box"><div id="histStatOut" class="stat-mini-num" style="color:#fdba74;">0</div><div class="stat-mini-lbl">Check-Outs</div></div>
+          <div class="stat-mini-box"><div id="histStatIn" class="stat-mini-num" style="color:#6ee7b7;">0</div><div class="stat-mini-lbl">Check-Ins</div></div>
+          <div class="stat-mini-box"><div id="histStatOther" class="stat-mini-num" style="color:#e9d5ff;">0</div><div class="stat-mini-lbl">Swaps/Repairs</div></div>
+        </div>
+        <div id="histTimelineList" class="timeline-list"></div>
       </div>
     </div>
   `;
@@ -422,7 +453,7 @@ function patchTrackerDBForInstrumentColumn() {
 document.addEventListener('DOMContentLoaded', async () => {
   injectWideCameraAndModals();
   patchTrackerDBForInstrumentColumn();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js?v=13').catch(() => {});
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js?v=14').catch(() => {});
   localStorage.removeItem('instrument_tracker_user_pin');
   localStorage.removeItem('instrument_tracker_user_role');
 
@@ -800,6 +831,7 @@ function isAnyModalBlockingScan() {
   if (UI.manualCaseModal.classList.contains('open')) return true;
   if (UI.repairModal.classList.contains('open')) return true;
   if (document.getElementById('unlistedModal').classList.contains('open')) return true;
+  if (document.getElementById('historyModal').classList.contains('open')) return true;
   return false;
 }
 
@@ -1349,7 +1381,8 @@ function runStatusSearch(rawQuery) {
   const q = String(rawQuery || '').trim().toLowerCase();
   if (!q) {
     UI.searchResultsContainer.innerHTML = `<div style="color:var(--text-muted); text-align:center; padding:20px;">
-      Type an instrument (<strong>"Trumpet 1"</strong>), student name, <strong>"checked out"</strong>, <strong>"checked out today"</strong>, or a date (<strong>"checked out 10/23"</strong>).
+      Type an instrument (<strong>"Trumpet 1"</strong>), student name, <strong>"checked out"</strong>, <strong>"checked out today"</strong>, or a date (<strong>"checked out 10/23"</strong>).<br><br>
+      <span style="color:#38bdf8;">💡 Tap any search result card to view its full check-out/in history!</span>
     </div>`;
     return;
   }
@@ -1392,7 +1425,13 @@ function runStatusSearch(rawQuery) {
       if (needsQr) statusDetail += `<br><span style="color:#fcd34d; font-weight:800;">🔧 FLAGGED: Needs Replacement QR Tag</span>`;
     } else statusDetail += `<br>No check-in/out scans recorded yet.`;
 
-    cardsHtml.push(`<div class="result-card"><div class="result-card-header"><strong style="font-size:1.05rem; color:#38bdf8;">🎺 ${escapeHtml(instSec)} #${escapeHtml(inst.Case_ID)}</strong><span class="${badgeClass}">${badgeLabel}</span></div><div style="font-size:0.84rem; color:#cbd5e1; line-height:1.4;">${statusDetail}</div></div>`);
+    cardsHtml.push(`
+      <div class="result-card tappable-card" data-hist-type="INST" data-sec="${escapeHtml(instSec)}" data-case="${escapeHtml(inst.Case_ID)}">
+        <div class="result-card-header"><strong style="font-size:1.05rem; color:#38bdf8;">🎺 ${escapeHtml(instSec)} #${escapeHtml(inst.Case_ID)}</strong><span class="${badgeClass}">${badgeLabel}</span></div>
+        <div style="font-size:0.84rem; color:#cbd5e1; line-height:1.4;">${statusDetail}</div>
+        <div class="tap-history-hint"><span>📜 Tap to view full instrument & repair history</span><span>${instLogs.length} logs ➔</span></div>
+      </div>
+    `);
   }
 
   for (const stu of AppState.rosterList) {
@@ -1426,10 +1465,111 @@ function runStatusSearch(rawQuery) {
       historySummary = `Nothing currently checked out.<br>Last Instrument: <strong>${escapeHtml(refInstName)} #${escapeHtml(refLog.Case_ID)}</strong><br>Out: ${lastOutLog ? formatShortDate(lastOutLog.Timestamp) : '—'} &nbsp;|&nbsp; In: ${lastInLog ? formatShortDate(lastInLog.Timestamp) : '—'}`;
     }
 
-    cardsHtml.push(`<div class="result-card"><div class="result-card-header"><strong style="font-size:1.05rem;">👤 ${escapeHtml(stu.Student_Name)} (${escapeHtml(stu.Ensemble)} #${stu.Line_Number})</strong><span class="${currentlyOut ? 'badge-out' : 'badge-in'}">${currentlyOut ? 'HAS INSTRUMENT OUT' : 'ALL CHECKED IN'}</span></div><div style="font-size:0.84rem; color:#cbd5e1; line-height:1.4;">Assigned: <strong>${escapeHtml(formatAssignedPairsText(stu))}</strong><br>${historySummary}</div></div>`);
+    cardsHtml.push(`
+      <div class="result-card tappable-card" data-hist-type="STU" data-comp="${escapeHtml(stu.composite_id)}">
+        <div class="result-card-header"><strong style="font-size:1.05rem;">👤 ${escapeHtml(stu.Student_Name)} (${escapeHtml(stu.Ensemble)} #${stu.Line_Number})</strong><span class="${currentlyOut ? 'badge-out' : 'badge-in'}">${currentlyOut ? 'HAS INSTRUMENT OUT' : 'ALL CHECKED IN'}</span></div>
+        <div style="font-size:0.84rem; color:#cbd5e1; line-height:1.4;">Assigned: <strong>${escapeHtml(formatAssignedPairsText(stu))}</strong><br>${historySummary}</div>
+        <div class="tap-history-hint"><span>📜 Tap to view practice & check-out/in history</span><span>${stuLogs.length} logs ➔</span></div>
+      </div>
+    `);
   }
 
   UI.searchResultsContainer.innerHTML = cardsHtml.length > 0 ? cardsHtml.join('') : `<div style="color:var(--text-muted); text-align:center; padding:20px;">No matching students or instruments found.</div>`;
+}
+
+/**
+ * Opens the Full Active History & Practice Habit Timeline Modal when a search result card is tapped.
+ */
+function openFullHistoryModal(type, secOrComp, caseId) {
+  const modal = document.getElementById('historyModal');
+  const titleEl = document.getElementById('histModalTitle');
+  const subEl = document.getElementById('histModalSub');
+  const statOutEl = document.getElementById('histStatOut');
+  const statInEl = document.getElementById('histStatIn');
+  const statOtherEl = document.getElementById('histStatOther');
+  const listEl = document.getElementById('histTimelineList');
+
+  let matchedLogs = [];
+  let stuRef = null;
+
+  if (type === 'STU') {
+    stuRef = AppState.rosterList.find((s) => s.composite_id === secOrComp);
+    if (!stuRef) return;
+    titleEl.textContent = `👤 ${stuRef.Student_Name}`;
+    subEl.textContent = `${stuRef.Ensemble} • Line #${stuRef.Line_Number} • Assigned: ${formatAssignedPairsText(stuRef)}`;
+    matchedLogs = AppState.scanHistory.filter(
+      (l) => Number(l.Line_Number) === Number(stuRef.Line_Number) && String(l.Student_Name || '').toUpperCase() === stuRef.Student_Name.toUpperCase()
+    );
+  } else {
+    const secUp = String(secOrComp || '').toUpperCase();
+    const caseUp = String(caseId || '').toUpperCase();
+    const instObj = AppState.instrumentsList.find((i) => i.inst_key === `${secUp}|${caseUp}`);
+    const authEns = getAuthoritativeInstrumentEnsemble(secOrComp, caseId) || (instObj && instObj.Ensemble) || 'Music';
+    titleEl.textContent = `🎺 ${secOrComp} #${caseId}`;
+    subEl.textContent = `${authEns} • Assigned: ${instObj ? instObj.Assigned_Student : 'Unassigned'}`;
+    matchedLogs = AppState.scanHistory.filter(
+      (l) => resolveLogInstrumentName(l, null).toUpperCase() === secUp && String(l.Case_ID || '').toUpperCase() === caseUp
+    );
+  }
+
+  const outCount = matchedLogs.filter((l) => l.Action === 'CHECK_OUT').length;
+  const inCount = matchedLogs.filter((l) => l.Action === 'CHECK_IN').length;
+  const otherCount = matchedLogs.filter((l) => l.Status_Flag && l.Status_Flag !== 'DIRECT_MATCH').length;
+
+  statOutEl.textContent = outCount;
+  statInEl.textContent = inCount;
+  statOtherEl.textContent = otherCount;
+
+  if (matchedLogs.length === 0) {
+    listEl.innerHTML = `<div style="color:var(--text-muted); text-align:center; padding:20px;">No check-out or check-in history recorded yet this term.</div>`;
+    modal.classList.add('open');
+    return;
+  }
+
+  // Render newest-first timeline
+  const reversed = [...matchedLogs].reverse();
+  listEl.innerHTML = reversed.map((log) => {
+    const isRepair = String(log.Status_Flag || '').includes('REPAIR') || String(log.Ensemble || '').toUpperCase() === 'REPAIR';
+    const isOut = log.Action === 'CHECK_OUT';
+    const tlClass = isRepair ? 'tl-repair' : isOut ? 'tl-out' : 'tl-in';
+    const actionBadge = isRepair
+      ? `<strong style="color:#e9d5ff;">🔧 ${escapeHtml(log.Status_Flag)}</strong>`
+      : isOut
+      ? `<strong style="color:#fdba74;">📤 CHECKED OUT</strong>`
+      : `<strong style="color:#6ee7b7;">📥 CHECKED IN</strong>`;
+
+    const instName = resolveLogInstrumentName(log, stuRef);
+    const subjectLine = type === 'STU'
+      ? `Instrument: <strong>${escapeHtml(instName)} #${escapeHtml(log.Case_ID)}</strong> (${escapeHtml(log.Ensemble || '')})`
+      : `Student/Shop: <strong>${escapeHtml(log.Student_Name)}</strong> (${escapeHtml(log.Ensemble || '')} #${log.Line_Number})`;
+
+    // Check if there is a matching Repair record with a Google Drive Invoice Link
+    let invoiceLinkHtml = '';
+    if (isRepair) {
+      const repMatch = AppState.repairsHistory.find(
+        (r) => String(r.Timestamp) === String(log.Timestamp) && String(r.Case_ID) === String(log.Case_ID)
+      );
+      if (repMatch && repMatch.Invoice_Drive_Link && repMatch.Invoice_Drive_Link.startsWith('http')) {
+        invoiceLinkHtml = `<br><a href="${escapeHtml(repMatch.Invoice_Drive_Link)}" target="_blank" rel="noopener" style="color:#38bdf8; font-weight:800;">📄 View Scanned Invoice in Google Drive ➔</a>`;
+      }
+    }
+
+    return `
+      <div class="timeline-item ${tlClass}">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          ${actionBadge}
+          <span style="font-size:0.74rem; color:#94a3b8; font-weight:700;">${escapeHtml(formatShortDate(log.Timestamp))}</span>
+        </div>
+        <div style="margin-top:3px; color:#f8fafc;">${subjectLine}</div>
+        ${log.Status_Flag && log.Status_Flag !== 'DIRECT_MATCH' && !isRepair ? `<div style="font-size:0.74rem; color:#fcd34d;">Flag: ${escapeHtml(log.Status_Flag)}</div>` : ''}
+        ${log.Volunteer_Note ? `<div style="font-size:0.75rem; color:#cbd5e1; margin-top:2px;">Note: <em>${escapeHtml(log.Volunteer_Note)}</em></div>` : ''}
+        ${invoiceLinkHtml}
+        ${log.Scanned_By ? `<div style="font-size:0.68rem; color:#64748b; margin-top:2px;">Logged by: ${escapeHtml(log.Scanned_By)}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  modal.classList.add('open');
 }
 
 function formatShortDate(tsStr) {
@@ -1767,7 +1907,6 @@ function bindEvents() {
     if (btn) handleKeypad(btn.dataset.key);
   });
 
-  // Transaction Confirmation Modal Events
   document.getElementById('txLineInput').addEventListener('input', handleTxModalLineLookup);
   document.getElementById('txEnsembleSelect').addEventListener('change', handleTxModalLineLookup);
   document.getElementById('btnTxConfirm').addEventListener('click', executeConfirmedTransaction);
@@ -1776,7 +1915,6 @@ function bindEvents() {
     AppState.pendingTx = null;
   });
 
-  // Unlisted Student Modal Events
   const addUnlistedBtn = document.getElementById('btnAddUnlistedStu');
   if (addUnlistedBtn) {
     addUnlistedBtn.addEventListener('click', () => openUnlistedLineModal(parseInt(AppState.currentInput, 10) || 1, null));
@@ -1787,7 +1925,18 @@ function bindEvents() {
   });
   document.getElementById('btnSaveNewStudent').addEventListener('click', handleSaveNewStudentFromModal);
 
-  // Manual Case / Bad QR Modal
+  // Full History Modal Delegation on Search Cards
+  UI.searchResultsContainer.addEventListener('click', (e) => {
+    const card = e.target.closest('.tappable-card');
+    if (!card) return;
+    const type = card.dataset.histType;
+    if (type === 'STU') openFullHistoryModal('STU', card.dataset.comp, '');
+    else if (type === 'INST') openFullHistoryModal('INST', card.dataset.sec, card.dataset.case);
+  });
+  document.getElementById('btnCloseHistory').addEventListener('click', () => {
+    document.getElementById('historyModal').classList.remove('open');
+  });
+
   UI.btnManualCase.addEventListener('click', openManualCaseModal);
   UI.btnCancelManual.addEventListener('click', () => UI.manualCaseModal.classList.remove('open'));
   UI.btnQuickConfirmAssigned.addEventListener('click', async () => {
