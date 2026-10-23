@@ -1,8 +1,5 @@
 /**
- * app.js - Complete Controller (Untruncated)
- * Features: Fail-Safe PIN Login, Repair Tracking + Invoice Scanner,
- * Clean Instrument QR Tags (No Student Names), Avery 60506 & 97184 Templates,
- * and Start Row / Start Column Partial Sheet Saver.
+ * app.js - Complete Controller (Verified 100% Untruncated)
  */
 
 // 👇👇 PASTE YOUR GOOGLE APPS SCRIPT WEB APP (/exec) URL BETWEEN THE QUOTES BELOW 👇👇
@@ -97,8 +94,6 @@ const UI = {
   qrLogoFileInput: document.getElementById('qrLogoFileInput'),
   btnClearLogo: document.getElementById('btnClearLogo'),
   qrSingleInputs: document.getElementById('qrSingleInputs'),
-  qrPrimaryLabel: document.getElementById('qrPrimaryLabel'),
-  qrSecondaryLabel: document.getElementById('qrSecondaryLabel'),
   qrInputPrimary: document.getElementById('qrInputPrimary'),
   qrInputSecondary: document.getElementById('qrInputSecondary'),
   btnPrintQr: document.getElementById('btnPrintQr'),
@@ -141,11 +136,16 @@ const UI = {
 };
 
 /* ============================================================================
- * 1. INITIALIZATION & FAIL-SAFE LOGIN
+ * 1. INITIALIZATION & PIN AUTHENTICATION
  * ============================================================================ */
 document.addEventListener('DOMContentLoaded', async () => {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
+
+  // Ensure PIN box never shows PINs in placeholder even if old HTML is cached
+  if (UI.loginPinInput) {
+    UI.loginPinInput.setAttribute('placeholder', 'Enter Access PIN');
   }
 
   const params = new URLSearchParams(window.location.search);
@@ -156,8 +156,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   applyModeUI(AppState.actionMode);
-  UI.qrTemplateSelect.value = AppState.averyTemplate;
-  updateStartColOptions();
+  if (UI.qrTemplateSelect) {
+    UI.qrTemplateSelect.value = AppState.averyTemplate;
+    updateStartColOptions();
+  }
   UI.qrSchoolHeaderInput.value = AppState.schoolHeader;
   UI.qrReturnInfoInput.value = AppState.returnInfo;
   if (AppState.schoolLogoDataUrl) UI.btnClearLogo.style.display = 'inline-block';
@@ -168,9 +170,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   await reloadMemoryFromIndexedDB();
   await updateSyncBadge();
 
-  if (AppState.userName && AppState.userPin) {
-    const role = resolveClientRole(AppState.userPin, AppState.userRole);
-    unlockAppWithRole(AppState.userName, role);
+  if (AppState.userName && AppState.userPin && AppState.userRole) {
+    unlockAppWithRole(AppState.userName, AppState.userRole);
     syncWithServer(false);
   } else {
     showLoginScreen();
@@ -192,11 +193,6 @@ function getGasUrl() {
   return '';
 }
 
-function resolveClientRole(pin, serverRole) {
-  if (serverRole === 'ADMIN' || String(pin).trim() === '9988') return 'ADMIN';
-  return 'VOLUNTEER';
-}
-
 function showLoginScreen() {
   UI.loginNameInput.value = AppState.userName || '';
   UI.loginPinInput.value = '';
@@ -212,16 +208,8 @@ async function handleLoginAttempt() {
   if (!name) return showLoginError('Please enter your name.');
   if (!pin) return showLoginError('Please enter your Access PIN.');
 
-  const isKnownDefaultPin = pin === '2468' || pin === '9988';
-
-  // If no GAS URL is configured yet, allow 9988 or 2468 in immediately
   if (!url) {
-    if (isKnownDefaultPin) {
-      completeLoginSession(name, pin, resolveClientRole(pin, null));
-      if (AppState.userRole === 'ADMIN') UI.settingsModal.classList.add('open');
-      return;
-    }
-    return showLoginError('Enter PIN 2468 (Volunteer) or 9988 (Admin).');
+    return showLoginError('Database URL not configured in app.js yet.');
   }
 
   UI.btnLoginSubmit.disabled = true;
@@ -233,12 +221,21 @@ async function handleLoginAttempt() {
     const res = await fetch(authUrl, { method: 'GET', redirect: 'follow' });
     const data = await res.json();
 
-    if (data.status === 'UNAUTHORIZED' && !isKnownDefaultPin) {
-      showLoginError('❌ Invalid PIN. Check with the Music Director.');
+    if (data.status === 'UNAUTHORIZED') {
+      showLoginError('Invalid Access PIN. Please check with the Music Director.');
       return;
     }
 
-    const role = resolveClientRole(pin, data.role);
+    // Determine Role from Server (with fallback if old Code.gs deployment is active)
+    let role = data.role;
+    if (!role) {
+      role = pin === '9988' ? 'ADMIN' : pin === '2468' ? 'VOLUNTEER' : null;
+    }
+    if (!role) {
+      showLoginError('Invalid Access PIN.');
+      return;
+    }
+
     completeLoginSession(name, pin, role);
 
     if (data.schoolHeader) {
@@ -263,11 +260,11 @@ async function handleLoginAttempt() {
     }
     flushOutboundQueue();
   } catch (err) {
-    // Fail-safe: If GAS throws an error or phone is offline, still allow default PINs or cached PIN in!
-    if (isKnownDefaultPin || pin === AppState.userPin) {
-      completeLoginSession(name, pin, resolveClientRole(pin, AppState.userRole));
+    // Offline fallback if previously logged in with this PIN on this device
+    if (AppState.userPin && pin === AppState.userPin && AppState.userRole) {
+      completeLoginSession(name, pin, AppState.userRole);
     } else {
-      showLoginError('Could not verify PIN with server. Use 2468 or 9988.');
+      showLoginError('Could not reach Google Sheet. Check internet connection or Apps Script deployment.');
     }
   } finally {
     UI.btnLoginSubmit.disabled = false;
@@ -338,9 +335,17 @@ async function syncWithServer(showAlert = false) {
     const res = await fetch(authUrl, { method: 'GET', redirect: 'follow' });
     const data = await res.json();
 
+    if (data.status === 'UNAUTHORIZED') {
+      showLoginScreen();
+      showLoginError('Session PIN changed by Director. Please re-enter PIN.');
+      return;
+    }
+
     if (data && Array.isArray(data.roster)) {
-      AppState.userRole = resolveClientRole(AppState.userPin, data.role);
-      localStorage.setItem(STORAGE_KEYS.USER_ROLE, AppState.userRole);
+      if (data.role) {
+        AppState.userRole = data.role;
+        localStorage.setItem(STORAGE_KEYS.USER_ROLE, AppState.userRole);
+      }
       unlockAppWithRole(AppState.userName, AppState.userRole);
 
       await window.TrackerDB.saveServerBundle({
@@ -508,7 +513,7 @@ function resetScannerState() {
 }
 
 /* ============================================================================
- * 3. CAMERA ENGINE & INSTRUMENT REPAIR / INVOICE CAPTURE WORKFLOW
+ * 3. CAMERA ENGINE & REPAIR / INVOICE CAPTURE WORKFLOW
  * ============================================================================ */
 async function startAlwaysOnCamera() {
   if (AppState.scannerStarted) return;
@@ -873,7 +878,7 @@ async function evaluateAndLogInstrumentScan(scannedSection, scannedCaseId, initi
 }
 
 /* ============================================================================
- * 4. LIVE SEARCH & STATUS QUERY ENGINE (INCLUDES REPAIR STATUS)
+ * 4. LIVE SEARCH & STATUS QUERY ENGINE
  * ============================================================================ */
 function runStatusSearch(rawQuery) {
   const q = String(rawQuery || '').trim().toLowerCase();
@@ -1023,6 +1028,7 @@ function formatShortDate(isoStr) {
  * 5. AVERY 60506 (2x2) & AVERY 97184 (3x2) QR GENERATOR + ROW/COL OFFSET
  * ============================================================================ */
 function updateStartColOptions() {
+  if (!UI.qrTemplateSelect || !UI.qrStartColSelect) return;
   const tpl = UI.qrTemplateSelect.value;
   const maxCols = tpl === '97184' ? 2 : 3;
   const currentCol = parseInt(UI.qrStartColSelect.value, 10) || 1;
@@ -1036,12 +1042,12 @@ function updateStartColOptions() {
 }
 
 function renderLabelSheets() {
-  const tpl = UI.qrTemplateSelect.value; // "60506" (3x4=12) or "97184" (2x4=8)
+  const tpl = UI.qrTemplateSelect ? UI.qrTemplateSelect.value : '60506';
   const colsPerPage = tpl === '97184' ? 2 : 3;
   const labelsPerPage = tpl === '97184' ? 8 : 12;
 
-  const startRow = Math.max(1, Math.min(4, parseInt(UI.qrStartRowSelect.value, 10) || 1));
-  const startCol = Math.max(1, Math.min(colsPerPage, parseInt(UI.qrStartColSelect.value, 10) || 1));
+  const startRow = UI.qrStartRowSelect ? Math.max(1, Math.min(4, parseInt(UI.qrStartRowSelect.value, 10) || 1)) : 1;
+  const startCol = UI.qrStartColSelect ? Math.max(1, Math.min(colsPerPage, parseInt(UI.qrStartColSelect.value, 10) || 1)) : 1;
   const emptySkipCount = (startRow - 1) * colsPerPage + (startCol - 1);
 
   const mode = UI.qrTypeSelect.value;
@@ -1055,7 +1061,6 @@ function renderLabelSheets() {
 
   const labelItems = [];
 
-  // Insert blank placeholder slots before (Start Row, Start Column) to conserve partial sticker sheets!
   for (let s = 0; s < emptySkipCount; s++) {
     labelItems.push({ emptySlot: true });
   }
@@ -1066,7 +1071,7 @@ function renderLabelSheets() {
     labelItems.push({
       payload: `INST|${sec}|${num}`,
       mainTitle: `${sec.toUpperCase()} #${num}`,
-      subTitle: '' // No student names or bottom subtitle on instrument tags!
+      subTitle: ''
     });
   } else if (mode === 'SINGLE_STU') {
     const name = UI.qrInputPrimary.value.trim() || 'Student';
@@ -1099,7 +1104,7 @@ function renderLabelSheets() {
       labelItems.push({
         payload: `INST|${matchedInst ? matchedInst.Section : sec}|${matchedInst ? matchedInst.Case_ID : num}`,
         mainTitle: `${sec} #${num}`,
-        subTitle: '' // Clean instrument tag with no student name
+        subTitle: ''
       });
     }
   } else if (mode === 'BATCH_INST') {
@@ -1110,7 +1115,7 @@ function renderLabelSheets() {
       labelItems.push({
         payload: `INST|${inst.Section}|${inst.Case_ID}`,
         mainTitle: `${inst.Section.toUpperCase()} #${inst.Case_ID}`,
-        subTitle: '' // Clean instrument tag with no student name
+        subTitle: ''
       });
     }
   } else if (mode === 'BATCH_STU') {
@@ -1138,7 +1143,7 @@ function renderLabelSheets() {
   const actualPrintedCount = labelItems.filter((x) => !x.emptySlot).length;
   if (actualPrintedCount === 0) {
     UI.qrPreviewGrid.innerHTML = `<div style="color:var(--text-muted); padding:24px; text-align:center;">
-      No matching tags to generate (all scanned QR codes are currently working).
+      No matching tags to generate.
     </div>`;
     return;
   }
@@ -1228,4 +1233,344 @@ function escapeHtml(str) {
 }
 
 /* ============================================================================
- * 6
+ * 6. WEB AUDIO, HAPTICS, & BACKGROUND QUEUE SYNC
+ * ============================================================================ */
+function unlockAudio() {
+  if (!AppState.audioCtx) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (AudioCtx) AppState.audioCtx = new AudioCtx();
+  }
+  if (AppState.audioCtx && AppState.audioCtx.state === 'suspended') {
+    AppState.audioCtx.resume();
+  }
+}
+
+function playTone(type) {
+  if (!AppState.audioCtx) return;
+  const ctx = AppState.audioCtx;
+  const now = ctx.currentTime;
+
+  if (type === 'MATCH') {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(880, now);
+    osc.frequency.setValueAtTime(1318.5, now + 0.07);
+    gain.gain.setValueAtTime(0.25, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.22);
+  } else {
+    for (let i = 0; i < 2; i++) {
+      const start = now + i * 0.16;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(220, start);
+      gain.gain.setValueAtTime(0.25, start);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.12);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.12);
+    }
+  }
+}
+
+function vibrateDevice(type) {
+  if ('vibrate' in navigator) {
+    try {
+      navigator.vibrate(type === 'MATCH' ? 70 : [140, 70, 140]);
+    } catch (_) {}
+  }
+}
+
+async function flushOutboundQueue() {
+  if (AppState.isSyncing || !navigator.onLine || !AppState.userPin) {
+    updateSyncBadge();
+    return;
+  }
+  const gasUrl = getGasUrl();
+  if (!gasUrl) return;
+
+  const pending = await window.TrackerDB.getAllStore('sync_queue');
+  if (pending.length === 0) {
+    updateSyncBadge();
+    return;
+  }
+
+  AppState.isSyncing = true;
+  updateSyncBadge();
+
+  try {
+    for (const item of pending) {
+      if (!navigator.onLine) break;
+      item.Auth_PIN = item.Auth_PIN || AppState.userPin;
+      const response = await fetch(gasUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(item),
+        redirect: 'follow'
+      });
+      if (response.ok) {
+        const resJson = await response.json();
+        if (resJson.status !== 'UNAUTHORIZED') {
+          await window.TrackerDB.removeQueueItem(item.local_id);
+        } else {
+          break;
+        }
+      } else {
+        break;
+      }
+    }
+  } catch (err) {
+    console.warn('Queue sync paused (offline):', err);
+  } finally {
+    AppState.isSyncing = false;
+    updateSyncBadge();
+  }
+}
+
+async function updateSyncBadge() {
+  const pending = await window.TrackerDB.getAllStore('sync_queue');
+  const count = pending.length;
+  UI.queueCountText.textContent = count;
+  UI.syncBadge.classList.remove('pending', 'offline');
+
+  if (!navigator.onLine) {
+    UI.syncBadge.classList.add('offline');
+    UI.syncText.textContent = `Offline (${count})`;
+  } else if (count > 0) {
+    UI.syncBadge.classList.add('pending');
+    UI.syncText.textContent = `Syncing (${count})`;
+  } else {
+    UI.syncText.textContent = 'Synced';
+  }
+}
+
+/* ============================================================================
+ * 7. UI NAVIGATION & EVENT LISTENERS
+ * ============================================================================ */
+function applyModeUI(mode) {
+  AppState.actionMode = mode;
+  localStorage.setItem(STORAGE_KEYS.ACTION_MODE, mode);
+  UI.btnModeIn.classList.toggle('active-in', mode === 'CHECK_IN');
+  UI.btnModeOut.classList.toggle('active-out', mode === 'CHECK_OUT');
+  if (AppState.activeStudent && isRepairShopEntity(AppState.activeStudent)) {
+    selectActiveStudent(AppState.activeStudent, false);
+  }
+}
+
+function bindEvents() {
+  UI.btnLoginSubmit.addEventListener('click', handleLoginAttempt);
+  UI.loginPinInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') handleLoginAttempt();
+  });
+
+  UI.userBadgeBtn.addEventListener('click', showLoginScreen);
+
+  UI.navTabs.forEach((tab) => {
+    tab.addEventListener('click', () => {
+      if (tab.dataset.view === 'viewQr' && AppState.userRole !== 'ADMIN') {
+        alert('🔒 The QR Tag Generator requires the Director Admin PIN. Tap your name badge in the top bar to switch to the Admin PIN.');
+        return;
+      }
+
+      UI.navTabs.forEach((t) => t.classList.remove('active'));
+      UI.views.forEach((v) => v.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById(tab.dataset.view).classList.add('active');
+
+      if (tab.dataset.view === 'viewSearch') {
+        runStatusSearch(UI.searchInput.value);
+      } else if (tab.dataset.view === 'viewQr') {
+        renderLabelSheets();
+      }
+    });
+  });
+
+  UI.btnModeIn.addEventListener('click', () => applyModeUI('CHECK_IN'));
+  UI.btnModeOut.addEventListener('click', () => applyModeUI('CHECK_OUT'));
+
+  UI.ensembleFilterGroup.addEventListener('click', (e) => {
+    const btn = e.target.closest('.pill-btn');
+    if (!btn) return;
+    UI.ensembleFilterGroup.querySelectorAll('.pill-btn').forEach((b) => b.classList.remove('active-ens'));
+    btn.classList.add('active-ens');
+    AppState.ensembleFilter = btn.dataset.ens;
+
+    if (AppState.ensembleFilter === 'REPAIR') {
+      AppState.currentInput = '900';
+      lookupByLineNumber('900');
+    } else {
+      if (AppState.currentInput === '900') AppState.currentInput = '';
+      lookupByLineNumber(AppState.currentInput);
+    }
+  });
+
+  UI.keypadGrid.addEventListener('click', (e) => {
+    const btn = e.target.closest('.key-btn');
+    if (btn) handleKeypad(btn.dataset.key);
+  });
+
+  // Manual Case / Bad QR Modal
+  UI.btnManualCase.addEventListener('click', openManualCaseModal);
+  UI.btnCancelManual.addEventListener('click', () => UI.manualCaseModal.classList.remove('open'));
+
+  UI.btnQuickConfirmAssigned.addEventListener('click', async () => {
+    if (!AppState.activeStudent) return;
+    UI.manualCaseModal.classList.remove('open');
+    await handleInstrumentScanOrRepair(
+      AppState.activeStudent.Section,
+      AppState.activeStudent.Assigned_Case_ID,
+      '[NEEDS QR TAG] Manual Entry - Damaged/Missing QR'
+    );
+  });
+
+  UI.btnSubmitManual.addEventListener('click', async () => {
+    const sec = UI.manualSectionInput.value.trim();
+    const num = UI.manualCaseNumInput.value.trim();
+    if (!sec || !num) {
+      alert('Please enter both Instrument Section (e.g. Trumpet) and Case #.');
+      return;
+    }
+    const note = UI.chkFlagBadQr.checked
+      ? '[NEEDS QR TAG] Manual Entry - Damaged/Missing QR'
+      : 'Manual Entry';
+    UI.manualCaseModal.classList.remove('open');
+    await handleInstrumentScanOrRepair(sec, num, note);
+  });
+
+  // Repair Modal
+  document.querySelectorAll('.repair-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      UI.repairDetailsInput.value = chip.dataset.text;
+    });
+  });
+
+  UI.invoiceFileInput.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (file) handleInvoiceFileSelected(file);
+  });
+
+  UI.btnCancelRepair.addEventListener('click', () => UI.repairModal.classList.remove('open'));
+  UI.btnSubmitRepair.addEventListener('click', submitRepairTransaction);
+
+  // Link School ID
+  UI.btnLinkSchoolId.addEventListener('click', () => {
+    AppState.awaitingIdLink = !AppState.awaitingIdLink;
+    UI.btnLinkSchoolId.textContent = AppState.awaitingIdLink ? '📷 Scan ID...' : '🔗 Link ID';
+  });
+
+  // Result Banner Notes
+  UI.btnNextStudent.addEventListener('click', () => resetScannerState());
+  UI.btnAddNote.addEventListener('click', () => {
+    UI.noteInput.value = '';
+    UI.noteModal.classList.add('open');
+  });
+
+  document.querySelectorAll('.note-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      UI.noteInput.value = chip.dataset.note;
+    });
+  });
+
+  UI.btnCancelNote.addEventListener('click', () => UI.noteModal.classList.remove('open'));
+  UI.btnSaveNote.addEventListener('click', async () => {
+    const noteText = UI.noteInput.value.trim();
+    UI.noteModal.classList.remove('open');
+    if (noteText && AppState.lastTransaction) {
+      const updated = await window.TrackerDB.updateQueuedNote(AppState.lastTransaction.local_id, noteText);
+      if (!updated) {
+        const followUp = { ...AppState.lastTransaction, Volunteer_Note: `[NOTE] ${noteText}` };
+        delete followUp.local_id;
+        await window.TrackerDB.enqueueItem(followUp);
+      }
+      flushOutboundQueue();
+    }
+    resetScannerState();
+  });
+
+  // Search Input
+  UI.searchInput.addEventListener('input', (e) => runStatusSearch(e.target.value));
+
+  // QR Generator Controls
+  UI.chkShowCutLines.addEventListener('change', (e) => {
+    UI.qrPreviewGrid.classList.toggle('hide-cut-lines', !e.target.checked);
+  });
+
+  if (UI.qrTemplateSelect) {
+    UI.qrTemplateSelect.addEventListener('change', () => {
+      updateStartColOptions();
+      renderLabelSheets();
+    });
+  }
+  if (UI.qrStartRowSelect) UI.qrStartRowSelect.addEventListener('change', renderLabelSheets);
+  if (UI.qrStartColSelect) UI.qrStartColSelect.addEventListener('change', renderLabelSheets);
+
+  UI.qrTypeSelect.addEventListener('change', () => {
+    const isSingle = UI.qrTypeSelect.value.startsWith('SINGLE_');
+    UI.qrSingleInputs.style.display = isSingle ? 'grid' : 'none';
+    if (UI.qrTypeSelect.value === 'SINGLE_STU') {
+      UI.qrInputPrimary.placeholder = 'Student Name (e.g. Joe Band)';
+      UI.qrInputSecondary.placeholder = 'Line # (e.g. 1)';
+    } else {
+      UI.qrInputPrimary.placeholder = 'Instrument (e.g. Trumpet)';
+      UI.qrInputSecondary.placeholder = 'Case # (e.g. 7)';
+    }
+    renderLabelSheets();
+  });
+
+  UI.qrEnsembleSelect.addEventListener('change', renderLabelSheets);
+  UI.qrSchoolHeaderInput.addEventListener('input', renderLabelSheets);
+  UI.qrReturnInfoInput.addEventListener('input', renderLabelSheets);
+  UI.qrInputPrimary.addEventListener('input', renderLabelSheets);
+  UI.qrInputSecondary.addEventListener('input', renderLabelSheets);
+
+  UI.qrLogoFileInput.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      AppState.schoolLogoDataUrl = ev.target.result;
+      localStorage.setItem(STORAGE_KEYS.SCHOOL_LOGO, AppState.schoolLogoDataUrl);
+      UI.btnClearLogo.style.display = 'inline-block';
+      renderLabelSheets();
+    };
+    reader.readAsDataURL(file);
+  });
+
+  UI.btnClearLogo.addEventListener('click', () => {
+    AppState.schoolLogoDataUrl = '';
+    localStorage.removeItem(STORAGE_KEYS.SCHOOL_LOGO);
+    UI.qrLogoFileInput.value = '';
+    UI.btnClearLogo.style.display = 'none';
+    renderLabelSheets();
+  });
+
+  UI.btnPrintQr.addEventListener('click', () => window.print());
+
+  // Settings Modal
+  UI.syncBadge.addEventListener('click', () => syncWithServer(false));
+  UI.btnSettings.addEventListener('click', () => {
+    UI.gasUrlInput.value = getGasUrl();
+    UI.settingsModal.classList.add('open');
+  });
+  UI.btnCloseSettings.addEventListener('click', () => UI.settingsModal.classList.remove('open'));
+  UI.btnSaveSettings.addEventListener('click', async () => {
+    const url = UI.gasUrlInput.value.trim();
+    if (url) {
+      localStorage.setItem(STORAGE_KEYS.GAS_URL, url);
+      UI.settingsModal.classList.remove('open');
+      await syncWithServer(true);
+    }
+  });
+  UI.btnReloadRoster.addEventListener('click', async () => {
+    const url = UI.gasUrlInput.value.trim();
+    if (url) localStorage.setItem(STORAGE_KEYS.GAS_URL, url);
+    await syncWithServer(true);
+  });
+}
+// === END OF APP.JS (VERIFY THIS LINE IS PRESENT WHEN PASTING) ===
