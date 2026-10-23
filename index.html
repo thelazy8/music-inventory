@@ -48,7 +48,7 @@
       flex-direction: column;
     }
 
-    /* --- STREAMLINED LOGIN OVERLAY (NAME & PIN ONLY) --- */
+    /* --- LOGIN OVERLAY (NAME & PIN ONLY) --- */
     .login-overlay {
       position: fixed;
       inset: 0;
@@ -59,7 +59,6 @@
       justify-content: center;
       padding: 20px;
     }
-
     .login-overlay.hidden { display: none; }
 
     .login-card {
@@ -76,7 +75,7 @@
     }
 
     .field-label {
-      font-size: 0.76rem;
+      font-size: 0.74rem;
       font-weight: 700;
       color: var(--text-muted);
       text-transform: uppercase;
@@ -114,7 +113,6 @@
       border-radius: 6px;
       cursor: pointer;
     }
-
     .nav-tab.active { background: #334155; color: #fff; }
     .nav-tab.admin-locked { opacity: 0.45; }
 
@@ -149,7 +147,6 @@
       cursor: pointer;
       border: 1px solid #047857;
     }
-
     .sync-pill.pending { background: #78350f; color: #fcd34d; border-color: #b45309; }
     .sync-pill.offline { background: #7f1d1d; color: #fca5a5; border-color: #b91c1c; }
 
@@ -164,7 +161,6 @@
       cursor: pointer;
     }
 
-    /* --- VIEW CONTAINERS --- */
     .view-panel {
       display: none;
       flex: 1;
@@ -172,10 +168,8 @@
       min-height: 0;
       overflow: hidden;
     }
-
     .view-panel.active { display: flex; }
 
-    /* --- SUB-BAR (MODE & ENSEMBLE FILTER) --- */
     .sub-bar {
       display: flex;
       justify-content: space-between;
@@ -203,13 +197,11 @@
       border-radius: 6px;
       cursor: pointer;
     }
-
     .pill-btn.active-in { background: var(--accent-checkin); color: #fff; }
     .pill-btn.active-out { background: var(--accent-checkout); color: #fff; }
     .pill-btn.active-ens { background: #0ea5e9; color: #fff; }
     .pill-btn.repair-pill.active-ens { background: #d97706; color: #fff; }
 
-    /* --- SCANNER WORKSPACE --- */
     .workspace {
       flex: 1;
       display: grid;
@@ -230,7 +222,6 @@
       border: 2px solid #334155;
       overflow-y: auto;
     }
-
     .student-card.ready-to-scan { border-color: #38bdf8; }
     .student-card.repair-active { border-color: #f59e0b; }
 
@@ -239,41 +230,12 @@
       align-items: baseline;
       justify-content: space-between;
     }
+    .line-label { font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700; }
+    .line-number-value { font-size: 2.1rem; font-weight: 900; color: #38bdf8; line-height: 1; }
+    .student-name { font-size: 1.05rem; font-weight: 800; line-height: 1.2; color: var(--text-main); }
+    .student-meta { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }
 
-    .line-label {
-      font-size: 0.7rem;
-      text-transform: uppercase;
-      color: var(--text-muted);
-      font-weight: 700;
-    }
-
-    .line-number-value {
-      font-size: 2.1rem;
-      font-weight: 900;
-      color: #38bdf8;
-      line-height: 1;
-    }
-
-    .student-name {
-      font-size: 1.05rem;
-      font-weight: 800;
-      line-height: 1.2;
-      color: var(--text-main);
-    }
-
-    .student-meta {
-      font-size: 0.78rem;
-      color: var(--text-muted);
-      margin-top: 2px;
-    }
-
-    .candidate-list {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      margin: 4px 0;
-    }
-
+    .candidate-list { display: flex; flex-direction: column; gap: 6px; margin: 4px 0; }
     .candidate-btn {
       background: var(--bg-dark);
       border: 1px solid #475569;
@@ -283,11 +245,7 @@
       color: #fff;
       cursor: pointer;
     }
-
-    .candidate-btn.selected {
-      border-color: #38bdf8;
-      background: rgba(56, 189, 248, 0.15);
-    }
+    .candidate-btn.selected { border-color: #38bdf8; background: rgba(56, 189, 248, 0.15); }
 
     .expected-case-box {
       background: var(--bg-dark);
@@ -298,30 +256,10 @@
       flex-direction: column;
       gap: 6px;
     }
-
-    .expected-top-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .expected-label {
-      font-size: 0.63rem;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      font-weight: 700;
-    }
-
-    .expected-id {
-      font-size: 0.98rem;
-      font-weight: 800;
-      color: #fff;
-    }
-
-    .card-action-row {
-      display: flex;
-      gap: 5px;
-    }
+    .expected-top-row { display: flex; justify-content: space-between; align-items: center; }
+    .expected-label { font-size: 0.63rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; }
+    .expected-id { font-size: 0.98rem; font-weight: 800; color: #fff; }
+    .card-action-row { display: flex; gap: 5px; }
 
     .mini-action-btn {
       flex: 1;
@@ -335,7 +273,6 @@
       font-weight: 700;
       text-align: center;
     }
-
     .mini-action-btn.warn-accent {
       color: #fcd34d;
       border-color: #b45309;
@@ -352,7 +289,6 @@
       align-items: center;
       justify-content: center;
     }
-
     .camera-card.active-target { border-color: #22c55e; }
     #reader { width: 100%; height: 100%; }
     #reader video { width: 100% !important; height: 100% !important; object-fit: cover !important; }
@@ -372,7 +308,6 @@
       pointer-events: none;
     }
 
-    /* --- RESULT BANNER OVERLAY --- */
     .result-banner {
       position: absolute;
       inset: 0 10px 8px 10px;
@@ -389,14 +324,11 @@
       transform: scale(0.96);
       transition: opacity 0.12s ease, transform 0.12s ease;
     }
-
     .result-banner.visible { opacity: 1; pointer-events: auto; transform: scale(1); }
     .result-banner.match { background: var(--status-match); color: #fff; }
     .result-banner.swap { background: var(--status-swap); color: #fff; }
-
     .result-title { font-size: 1.3rem; font-weight: 900; margin-top: 4px; }
     .result-subtitle { font-size: 0.9rem; font-weight: 600; margin-top: 4px; }
-
     .banner-actions { display: flex; gap: 8px; margin-top: 10px; }
     .banner-btn {
       background: rgba(0, 0, 0, 0.3);
@@ -409,7 +341,6 @@
       cursor: pointer;
     }
 
-    /* --- KEYPAD --- */
     .keypad-section {
       padding: 0 10px 10px 10px;
       flex-shrink: 0;
@@ -417,7 +348,6 @@
       max-height: 340px;
       display: flex;
     }
-
     .keypad-grid {
       flex: 1;
       display: grid;
@@ -425,7 +355,6 @@
       grid-template-rows: repeat(4, 1fr);
       gap: 7px;
     }
-
     .key-btn {
       background: var(--bg-key);
       color: var(--text-main);
@@ -435,12 +364,11 @@
       font-weight: 800;
       cursor: pointer;
     }
-
     .key-btn:active { background: var(--bg-key-active); transform: scale(0.97); }
     .key-btn.key-clear { background: #7f1d1d; border-color: #991b1b; color: #fecaca; font-size: 1.05rem; }
     .key-btn.key-back { background: #1e293b; font-size: 1.3rem; }
 
-    /* --- VIEW 2: SEARCH & LIVE STATUS --- */
+    /* --- VIEW 2: SEARCH --- */
     .scroll-view {
       flex: 1;
       overflow-y: auto;
@@ -449,7 +377,6 @@
       flex-direction: column;
       gap: 10px;
     }
-
     .search-input {
       width: 100%;
       padding: 12px 14px;
@@ -461,7 +388,6 @@
       user-select: text;
       -webkit-user-select: text;
     }
-
     .result-card {
       background: var(--bg-card);
       border: 1px solid #334155;
@@ -471,42 +397,12 @@
       flex-direction: column;
       gap: 6px;
     }
+    .result-card-header { display: flex; justify-content: space-between; align-items: center; }
+    .badge-out { background: #7c2d12; color: #fdba74; padding: 3px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 800; }
+    .badge-repair { background: #581c87; color: #e9d5ff; border: 1px solid #9333ea; padding: 3px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 800; }
+    .badge-in { background: #064e3b; color: #6ee7b7; padding: 3px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 800; }
 
-    .result-card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .badge-out {
-      background: #7c2d12;
-      color: #fdba74;
-      padding: 3px 8px;
-      border-radius: 6px;
-      font-size: 0.72rem;
-      font-weight: 800;
-    }
-
-    .badge-repair {
-      background: #581c87;
-      color: #e9d5ff;
-      border: 1px solid #9333ea;
-      padding: 3px 8px;
-      border-radius: 6px;
-      font-size: 0.72rem;
-      font-weight: 800;
-    }
-
-    .badge-in {
-      background: #064e3b;
-      color: #6ee7b7;
-      padding: 3px 8px;
-      border-radius: 6px;
-      font-size: 0.72rem;
-      font-weight: 800;
-    }
-
-    /* --- VIEW 3: AVERY 60506 QR CODE GENERATOR --- */
+    /* --- VIEW 3: AVERY 60506 (2x2) & AVERY 97184 (3x2) GENERATOR --- */
     .qr-controls {
       background: var(--bg-card);
       padding: 12px;
@@ -516,21 +412,17 @@
       flex-direction: column;
       gap: 10px;
     }
-
-    .form-row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-    }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .form-row-3 { display: grid; grid-template-columns: 1.3fr 0.85fr 0.85fr; gap: 8px; }
 
     .form-select, .form-input {
       width: 100%;
-      padding: 9px;
+      padding: 8px 9px;
       border-radius: 8px;
       border: 1px solid #475569;
       background: var(--bg-dark);
       color: #fff;
-      font-size: 0.86rem;
+      font-size: 0.85rem;
       user-select: text;
       -webkit-user-select: text;
     }
@@ -542,7 +434,8 @@
       align-items: center;
     }
 
-    .avery-page {
+    /* Template 1: Avery 60506 (2" x 2" Square, 3 cols x 4 rows = 12 per sheet) */
+    .avery-page.tpl-60506 {
       display: grid;
       grid-template-columns: repeat(3, 2in);
       grid-auto-rows: 2in;
@@ -553,10 +446,29 @@
       border-radius: 8px;
       box-shadow: 0 10px 25px rgba(0,0,0,0.4);
     }
-
-    .avery-label-cell {
+    .avery-page.tpl-60506 .avery-label-cell {
       width: 2in;
       height: 2in;
+    }
+
+    /* Template 2: Avery 97184 / 22890 (3" x 2" Rectangle, 2 cols x 4 rows = 8 per sheet) */
+    .avery-page.tpl-97184 {
+      display: grid;
+      grid-template-columns: repeat(2, 3in);
+      grid-auto-rows: 2in;
+      column-gap: 0.8in;
+      row-gap: 0.333in;
+      background: #fff;
+      padding: 1in 0.85in;
+      border-radius: 8px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+    }
+    .avery-page.tpl-97184 .avery-label-cell {
+      width: 3in;
+      height: 2in;
+    }
+
+    .avery-label-cell {
       background: #fff;
       color: #000;
       border: 1px dashed #cbd5e1;
@@ -584,61 +496,14 @@
       padding-bottom: 2px;
       min-height: 0.28in;
     }
-
-    .tag-logo-img {
-      max-height: 0.24in;
-      max-width: 0.35in;
-      object-fit: contain;
-    }
-
-    .tag-school-block {
-      display: flex;
-      flex-direction: column;
-      line-height: 1.05;
-    }
-
-    .tag-school-name {
-      font-size: 7.5pt;
-      font-weight: 900;
-      color: #000;
-      text-transform: uppercase;
-    }
-
-    .tag-return-text {
-      font-size: 5.8pt;
-      font-weight: 700;
-      color: #222;
-    }
-
-    .tag-qr-wrap {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin: 1px 0;
-    }
-
-    .tag-footer-band {
-      width: 100%;
-      border-top: 1.5px solid #000;
-      padding-top: 1px;
-      line-height: 1.05;
-    }
-
-    .tag-main-id {
-      font-size: 11pt;
-      font-weight: 900;
-      color: #000;
-      letter-spacing: 0.01em;
-    }
-
-    .tag-sub-id {
-      font-size: 6.8pt;
-      font-weight: 700;
-      color: #333;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
+    .tag-logo-img { max-height: 0.24in; max-width: 0.38in; object-fit: contain; }
+    .tag-school-block { display: flex; flex-direction: column; line-height: 1.05; }
+    .tag-school-name { font-size: 7.5pt; font-weight: 900; color: #000; text-transform: uppercase; }
+    .tag-return-text { font-size: 5.8pt; font-weight: 700; color: #222; }
+    .tag-qr-wrap { display: flex; align-items: center; justify-content: center; margin: 1px 0; }
+    .tag-footer-band { width: 100%; border-top: 1.5px solid #000; padding-top: 2px; line-height: 1.1; }
+    .tag-main-id { font-size: 12pt; font-weight: 900; color: #000; letter-spacing: 0.02em; }
+    .tag-sub-id { font-size: 6.8pt; font-weight: 700; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
     /* --- MODALS --- */
     .modal-backdrop {
@@ -651,9 +516,7 @@
       padding: 16px;
       z-index: 50;
     }
-
     .modal-backdrop.open { display: flex; }
-
     .modal-box {
       background: var(--bg-card);
       border: 1px solid #475569;
@@ -664,41 +527,12 @@
       max-height: 92dvh;
       overflow-y: auto;
     }
-
-    .btn-primary {
-      background: #0284c7;
-      color: #fff;
-      border: none;
-      padding: 10px 14px;
-      border-radius: 8px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-
+    .btn-primary { background: #0284c7; color: #fff; border: none; padding: 10px 14px; border-radius: 8px; font-weight: 700; cursor: pointer; }
     .btn-success-large {
-      background: #16a34a;
-      color: #fff;
-      border: 1px solid #22c55e;
-      padding: 12px 14px;
-      border-radius: 10px;
-      font-weight: 900;
-      font-size: 0.95rem;
-      width: 100%;
-      cursor: pointer;
-      margin-bottom: 12px;
-      text-align: center;
+      background: #16a34a; color: #fff; border: 1px solid #22c55e; padding: 12px 14px;
+      border-radius: 10px; font-weight: 900; font-size: 0.95rem; width: 100%; cursor: pointer; margin-bottom: 12px;
     }
-
-    .btn-secondary {
-      background: var(--bg-key);
-      color: var(--text-main);
-      border: none;
-      padding: 10px 12px;
-      border-radius: 8px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-
+    .btn-secondary { background: var(--bg-key); color: var(--text-main); border: none; padding: 10px 12px; border-radius: 8px; font-weight: 600; cursor: pointer; }
     .invoice-upload-box {
       border: 1.5px dashed #38bdf8;
       background: rgba(56, 189, 248, 0.08);
@@ -708,10 +542,7 @@
       margin-bottom: 12px;
     }
 
-    @page {
-      size: 8.5in 11in;
-      margin: 0in;
-    }
+    @page { size: 8.5in 11in; margin: 0in; }
 
     @media print {
       html, body {
@@ -735,25 +566,33 @@
       .avery-page {
         width: 8.5in !important;
         height: 11in !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        page-break-after: always !important;
+        break-after: page !important;
+      }
+      .avery-page.tpl-60506 {
         padding: 0.625in !important;
         display: grid !important;
         grid-template-columns: repeat(3, 2in) !important;
         grid-template-rows: repeat(4, 2in) !important;
         column-gap: 0.625in !important;
         row-gap: 0.5833in !important;
-        box-shadow: none !important;
-        border-radius: 0 !important;
-        page-break-after: always !important;
-        break-after: page !important;
+      }
+      .avery-page.tpl-97184 {
+        padding: 1in 0.85in !important;
+        display: grid !important;
+        grid-template-columns: repeat(2, 3in) !important;
+        grid-template-rows: repeat(4, 2in) !important;
+        column-gap: 0.8in !important;
+        row-gap: 0.3333in !important;
       }
     }
   </style>
 </head>
 <body>
 
-  <!-- ====================================================================
-       STREAMLINED LOGIN SCREEN (NAME & PIN ONLY)
-       ==================================================================== -->
+  <!-- LOGIN OVERLAY (NAME & PIN ONLY) -->
   <div id="loginOverlay" class="login-overlay">
     <div class="login-card">
       <div style="text-align:center;">
@@ -769,7 +608,7 @@
 
       <div>
         <label class="field-label" for="loginPinInput">Access PIN</label>
-        <input id="loginPinInput" class="form-input" type="password" inputmode="numeric" placeholder="Enter 4-to-6 digit PIN">
+        <input id="loginPinInput" class="form-input" type="password" inputmode="numeric" placeholder="Volunteer (2468) or Admin (9988)">
       </div>
 
       <div id="loginErrorMsg" style="color:#fca5a5; font-size:0.8rem; font-weight:700; display:none; text-align:center;"></div>
@@ -796,7 +635,7 @@
     </div>
   </header>
 
-  <!-- VIEW 1: HIGH-SPEED SCANNER -->
+  <!-- VIEW 1: SCANNER -->
   <div id="viewScanner" class="view-panel active">
     <div class="sub-bar">
       <div class="pill-group">
@@ -873,7 +712,7 @@
     </section>
   </div>
 
-  <!-- VIEW 2: LIVE STATUS & HISTORY SEARCH -->
+  <!-- VIEW 2: SEARCH -->
   <div id="viewSearch" class="view-panel">
     <div class="scroll-view">
       <input id="searchInput" class="search-input" type="search" placeholder='Search "Trumpet 1", "Joe", "Repair", or "Needs QR"...'>
@@ -881,37 +720,76 @@
     </div>
   </div>
 
-  <!-- VIEW 3: AVERY 60506 QR CODE & SCHOOL TAG GENERATOR -->
+  <!-- VIEW 3: AVERY 60506 & 97184 QR CODE GENERATOR -->
   <div id="viewQr" class="view-panel">
     <div class="scroll-view">
       <div class="qr-controls">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <strong style="font-size:0.95rem;">Avery 60506 (2" × 2" — 12 per sheet) Tag Generator</strong>
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+          <strong style="font-size:0.95rem;">QR Label Sheet Generator</strong>
           <label style="font-size:0.75rem; color:var(--text-muted); display:flex; align-items:center; gap:5px; cursor:pointer;">
             <input id="chkShowCutLines" type="checkbox"> Print Alignment Borders
           </label>
         </div>
 
-        <div class="form-row">
+        <!-- Sheet Template + Start Row & Start Column (Conserve Partial Label Sheets!) -->
+        <div class="form-row-3">
           <div>
-            <label class="field-label">Tag Batch / Mode</label>
-            <select id="qrTypeSelect" class="form-select">
-              <option value="BATCH_INST">All Roster Instruments (Batch)</option>
-              <option value="FLAGGED_BAD_QR">🔧 Flagged "Bad QR" Cases Only (Auto-Queue)</option>
-              <option value="REPAIR_SHOP_QR">🛠️ Repair Shop Pass QR Card (#900)</option>
-              <option value="SINGLE_INST">Single Replacement Instrument Tag</option>
-              <option value="BATCH_STU">All Roster Students (Batch)</option>
-              <option value="SINGLE_STU">Single Student Badge QR</option>
-              <option value="RETURN_ONLY">Companion "Property Of / Return" Sticker (12-up)</option>
+            <label class="field-label" for="qrTemplateSelect">Avery Label Sheet Size</label>
+            <select id="qrTemplateSelect" class="form-select">
+              <option value="60506">Avery 60506 (2"×2" • 12/sheet • 3×4)</option>
+              <option value="97184">Avery 97184 (3"×2" • 8/sheet • 2×4)</option>
             </select>
           </div>
           <div>
-            <label class="field-label">Ensemble Filter</label>
+            <label class="field-label" for="qrStartRowSelect">Start Row</label>
+            <select id="qrStartRowSelect" class="form-select">
+              <option value="1">Row 1 (Top)</option>
+              <option value="2">Row 2</option>
+              <option value="3">Row 3</option>
+              <option value="4">Row 4 (Bottom)</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label" for="qrStartColSelect">Start Column</label>
+            <select id="qrStartColSelect" class="form-select">
+              <option value="1">Col 1 (Left)</option>
+              <option value="2">Col 2</option>
+              <option value="3">Col 3 (60506)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div>
+            <label class="field-label" for="qrTypeSelect">What to Print</label>
+            <select id="qrTypeSelect" class="form-select">
+              <option value="BATCH_INST">All Roster Instruments (Batch)</option>
+              <option value="SINGLE_INST">Single Replacement Instrument Tag</option>
+              <option value="FLAGGED_BAD_QR">🔧 Flagged "Bad QR" Cases Only</option>
+              <option value="REPAIR_SHOP_QR">🛠️ Repair Shop Pass QR Card (#900)</option>
+              <option value="BATCH_STU">All Roster Students (Batch)</option>
+              <option value="SINGLE_STU">Single Student Badge QR</option>
+              <option value="RETURN_ONLY">Companion "Property Of / Return" Sticker</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label" for="qrEnsembleSelect">Ensemble Filter</label>
             <select id="qrEnsembleSelect" class="form-select">
               <option value="ALL">Band & Orchestra</option>
               <option value="Band">Band Only</option>
               <option value="Orchestra">Orchestra Only</option>
             </select>
+          </div>
+        </div>
+
+        <div id="qrSingleInputs" class="form-row" style="display:none;">
+          <div>
+            <label class="field-label" id="qrPrimaryLabel">Instrument Section</label>
+            <input id="qrInputPrimary" class="form-input" type="text" placeholder="e.g. Trumpet">
+          </div>
+          <div>
+            <label class="field-label" id="qrSecondaryLabel">Case #</label>
+            <input id="qrInputSecondary" class="form-input" type="text" placeholder="e.g. 7">
           </div>
         </div>
 
@@ -933,14 +811,8 @@
           </div>
           <div style="display:flex; gap:6px; justify-content:flex-end;">
             <button id="btnClearLogo" class="btn-secondary" type="button" style="display:none;">✖ Clear Logo</button>
-            <button id="btnPrintQr" class="btn-primary" type="button">🖨️ Print Avery 60506 Sheet</button>
+            <button id="btnPrintQr" class="btn-primary" type="button">🖨️ Print Label Sheet</button>
           </div>
-        </div>
-
-        <div id="qrSingleInputs" class="form-row" style="display:none;">
-          <input id="qrInputPrimary" class="form-input" type="text" placeholder="Instrument (e.g. Trumpet)">
-          <input id="qrInputSecondary" class="form-input" type="text" placeholder="Case # (e.g. 7)">
-          <input id="qrStartSlotInput" class="form-input" type="number" min="1" max="12" value="1" placeholder="Start on Label # (1-12)">
         </div>
       </div>
 
@@ -948,9 +820,7 @@
     </div>
   </div>
 
-  <!-- ====================================================================
-       INSTRUMENT REPAIR CHECK-OUT / CHECK-IN + INVOICE SCANNER MODAL
-       ==================================================================== -->
+  <!-- REPAIR MODAL -->
   <div id="repairModal" class="modal-backdrop">
     <div class="modal-box">
       <div id="repairModalTitle" style="font-weight:900; font-size:1.1rem; color:#fbbf24; margin-bottom:4px;">
@@ -975,7 +845,6 @@
       <label id="repairDetailsLabel" class="field-label" for="repairDetailsInput">Issue / Reason for Repair</label>
       <input id="repairDetailsInput" class="form-input" type="text" placeholder="Describe issue or work performed..." style="margin-bottom:10px;">
 
-      <!-- Post-Repair Return Fields (Shown when checking BACK IN from repair) -->
       <div id="repairReturnFields" style="display:none;">
         <div class="form-row" style="margin-bottom:10px;">
           <div>
@@ -988,7 +857,6 @@
           </div>
         </div>
 
-        <!-- Admin-Only Invoice Document / Camera Scanner -->
         <div id="adminInvoiceBox" class="invoice-upload-box">
           <div style="font-size:0.8rem; font-weight:800; color:#38bdf8; margin-bottom:6px;">
             📸 Scan or Attach Repair Invoice (Saves to Google Drive)
@@ -1005,7 +873,7 @@
     </div>
   </div>
 
-  <!-- MANUAL INSTRUMENT OVERRIDE / DAMAGED QR MODAL -->
+  <!-- MANUAL INSTRUMENT MODAL -->
   <div id="manualCaseModal" class="modal-backdrop">
     <div class="modal-box">
       <div style="font-weight:800; font-size:1.05rem; margin-bottom:10px;">⌨️ Manual Entry (Damaged / Missing QR)</div>
